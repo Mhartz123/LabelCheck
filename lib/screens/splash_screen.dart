@@ -60,7 +60,7 @@ class _SplashScreenState extends State<SplashScreen>
                     borderRadius: BorderRadius.circular(28),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.12),
+                        color: Colors.black.withValues(),
                         blurRadius: 16,
                         offset: const Offset(0, 6),
                       ),
@@ -90,7 +90,7 @@ class _SplashScreenState extends State<SplashScreen>
                 Text(
                   'Scan. Verify. Record.',
                   style: TextStyle(
-                    color: Colors.white.withOpacity(0.80),
+                    color: Colors.white.withValues(),
                     fontSize: 14,
                     letterSpacing: 1.4,
                   ),
