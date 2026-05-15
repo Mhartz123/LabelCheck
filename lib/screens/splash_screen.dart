@@ -20,16 +20,15 @@ class _SplashScreenState extends State<SplashScreen>
     super.initState();
     _controller = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1200),
+      duration: const Duration(milliseconds: 1000),
     );
     _fadeAnim = CurvedAnimation(parent: _controller, curve: Curves.easeIn);
-    _scaleAnim = Tween<double>(begin: 0.8, end: 1.0).animate(
+    _scaleAnim = Tween<double>(begin: 0.85, end: 1.0).animate(
       CurvedAnimation(parent: _controller, curve: Curves.easeOutBack),
     );
     _controller.forward();
 
-    // Auto-transition after 2.5 s
-    Future.delayed(const Duration(milliseconds: 2500), () {
+    Future.delayed(const Duration(milliseconds: 2000), () {
       if (mounted) widget.onFinished();
     });
   }
@@ -44,115 +43,63 @@ class _SplashScreenState extends State<SplashScreen>
   Widget build(BuildContext context) {
     return Scaffold(
       backgroundColor: const Color(0xFF4CAF50),
-      body: SafeArea(
-        child: Column(
-          children: [
-            // Header icons matching wireframe Frame 1
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: const [
-                  Icon(Icons.menu, color: Colors.white),
-                  Icon(Icons.flash_off, color: Colors.white),
-                ],
-              ),
-            ),
-
-            // Logo + branding
-            Expanded(
-              child: FadeTransition(
-                opacity: _fadeAnim,
-                child: ScaleTransition(
-                  scale: _scaleAnim,
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Container(
-                        width: 120,
-                        height: 120,
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(32),
-                          boxShadow: [
-                            BoxShadow(
-                              color: Colors.black.withOpacity(0.15),
-                              blurRadius: 20,
-                              offset: const Offset(0, 8),
-                            ),
-                          ],
-                        ),
-                        child: const Icon(
-                          Icons.qr_code_scanner,
-                          size: 64,
-                          color: Color(0xFF4CAF50),
-                        ),
-                      ),
-                      const SizedBox(height: 28),
-                      const Text(
-                        'Ingredient Scanner',
-                        style: TextStyle(
-                          color: Colors.white,
-                          fontSize: 28,
-                          fontWeight: FontWeight.bold,
-                          letterSpacing: 0.5,
-                        ),
-                      ),
-                      const SizedBox(height: 10),
-                      Text(
-                        'Scan. Discover. Record.',
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(0.85),
-                          fontSize: 16,
-                          letterSpacing: 1.2,
-                        ),
+      body: FadeTransition(
+        opacity: _fadeAnim,
+        child: ScaleTransition(
+          scale: _scaleAnim,
+          child: Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Icon
+                Container(
+                  width: 100,
+                  height: 100,
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(28),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withOpacity(0.12),
+                        blurRadius: 16,
+                        offset: const Offset(0, 6),
                       ),
                     ],
                   ),
+                  child: const Icon(
+                    Icons.qr_code_scanner,
+                    size: 52,
+                    color: Color(0xFF4CAF50),
+                  ),
                 ),
-              ),
-            ),
+                const SizedBox(height: 24),
 
-            // Bottom nav preview (decorative, matches wireframe)
-            Container(
-              decoration: const BoxDecoration(
-                color: Colors.white,
-                borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
-              ),
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 40, vertical: 16),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: const [
-                  _NavIcon(icon: Icons.menu_book_outlined, label: 'Ingredients'),
-                  _NavIcon(icon: Icons.camera_alt_outlined, label: 'Scan'),
-                  _NavIcon(icon: Icons.folder_outlined, label: 'Records'),
-                ],
-              ),
+                // Title
+                const Text(
+                  'VerifyDA',
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontSize: 32,
+                    fontWeight: FontWeight.bold,
+                    letterSpacing: 1.0,
+                  ),
+                ),
+                const SizedBox(height: 8),
+
+                // Subtitle
+                Text(
+                  'Scan. Verify. Record.',
+                  style: TextStyle(
+                    color: Colors.white.withOpacity(0.80),
+                    fontSize: 14,
+                    letterSpacing: 1.4,
+                  ),
+                ),
+              ],
             ),
-          ],
+          ),
         ),
       ),
-    );
-  }
-}
-
-class _NavIcon extends StatelessWidget {
-  final IconData icon;
-  final String label;
-
-  const _NavIcon({required this.icon, required this.label});
-
-  @override
-  Widget build(BuildContext context) {
-    return Column(
-      mainAxisSize: MainAxisSize.min,
-      children: [
-        Icon(icon, color: Colors.grey.shade400, size: 28),
-        const SizedBox(height: 4),
-        Text(label,
-            style: TextStyle(color: Colors.grey.shade400, fontSize: 11)),
-      ],
     );
   }
 }
