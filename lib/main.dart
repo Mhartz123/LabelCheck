@@ -61,9 +61,24 @@ class AppShell extends StatefulWidget {
 }
 
 class _AppShellState extends State<AppShell> {
-  int _currentIndex = 0; // 0 = Scan, 1 = Records
+  int _currentIndex = 0;
 
-  void _switchTab(int index) => setState(() => _currentIndex = index);
+  final GlobalKey<RecordsScreenState> _recordsKey =
+  GlobalKey<RecordsScreenState>();
+
+  void _switchTab(int index) {
+    setState(() => _currentIndex = index);
+
+    if (index == 1) {
+      // If the RecordsScreen is already mounted, reload immediately.
+      // If not yet mounted (first visit), it calls loadFiles() in its own
+      // initState — but we also schedule a post-frame callback as a fallback
+      // so the key is guaranteed to be attached before we call through it.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        _recordsKey.currentState?.loadFiles();
+      });
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -72,7 +87,7 @@ class _AppShellState extends State<AppShell> {
         index: _currentIndex,
         children: [
           const CameraScreen(),
-          const RecordsScreen(),
+          RecordsScreen(key: _recordsKey),
         ],
       ),
       bottomNavigationBar: BottomNavigationBar(

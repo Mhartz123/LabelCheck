@@ -8,10 +8,10 @@ class RecordsScreen extends StatefulWidget {
   const RecordsScreen({super.key});
 
   @override
-  State<RecordsScreen> createState() => _RecordsScreenState();
+  State<RecordsScreen> createState() => RecordsScreenState();
 }
 
-class _RecordsScreenState extends State<RecordsScreen> {
+class RecordsScreenState extends State<RecordsScreen> {
   List<File> _allFiles = [];
   List<File> _filtered = [];
   String _sortBy = 'Name';
@@ -21,17 +21,22 @@ class _RecordsScreenState extends State<RecordsScreen> {
   bool _loading = true;
 
   @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    _loadFiles();
+  void initState() {
+    super.initState();
+    loadFiles();
   }
 
-  Future<void> _loadFiles() async {
+  @override
+  void dispose() {
+    super.dispose();
+  }
+
+  Future<void> loadFiles() async {
     setState(() => _loading = true);
     try {
       final Directory appDir = await getApplicationDocumentsDirectory();
       final Directory photoDir =
-          Directory(p.join(appDir.path, 'UI_Prototype_Photos'));
+      Directory(p.join(appDir.path, 'UI_Prototype_Photos'));
       if (!await photoDir.exists()) {
         setState(() {
           _allFiles = [];
@@ -59,9 +64,9 @@ class _RecordsScreenState extends State<RecordsScreen> {
     if (_searchQuery.isNotEmpty) {
       list = list
           .where((f) => p
-              .basename(f.path)
-              .toLowerCase()
-              .contains(_searchQuery.toLowerCase()))
+          .basename(f.path)
+          .toLowerCase()
+          .contains(_searchQuery.toLowerCase()))
           .toList();
     }
     if (_sortBy == 'Name') {
@@ -119,7 +124,7 @@ class _RecordsScreenState extends State<RecordsScreen> {
             Container(
               width: double.infinity,
               padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
                 color: const Color(0xFFD4A847),
                 borderRadius: BorderRadius.circular(8),
@@ -167,7 +172,7 @@ class _RecordsScreenState extends State<RecordsScreen> {
                     onPressed: () async {
                       Navigator.of(context).pop();
                       await file.delete();
-                      _loadFiles();
+                      loadFiles();
                     },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFFE57373),
@@ -205,7 +210,7 @@ class _RecordsScreenState extends State<RecordsScreen> {
             Container(
               width: double.infinity,
               padding:
-                  const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
               decoration: BoxDecoration(
                 color: const Color(0xFFD4A847),
                 borderRadius: BorderRadius.circular(8),
@@ -256,7 +261,7 @@ class _RecordsScreenState extends State<RecordsScreen> {
                         await File(path).delete();
                       }
                       _unselectAll();
-                      _loadFiles();
+                      loadFiles();
                     },
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFFE57373),
@@ -295,7 +300,7 @@ class _RecordsScreenState extends State<RecordsScreen> {
           // Sort bar
           Padding(
             padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: Row(
               children: [
                 const Text('Sort By :',
@@ -323,7 +328,7 @@ class _RecordsScreenState extends State<RecordsScreen> {
           // Search bar
           Padding(
             padding:
-                const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+            const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             child: TextField(
               onChanged: _onSearchChanged,
               decoration: InputDecoration(
@@ -334,7 +339,7 @@ class _RecordsScreenState extends State<RecordsScreen> {
                 border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(8)),
                 suffixIcon:
-                    const Icon(Icons.search, color: Colors.grey),
+                const Icon(Icons.search, color: Colors.grey),
               ),
             ),
           ),
@@ -345,58 +350,58 @@ class _RecordsScreenState extends State<RecordsScreen> {
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
                 : _filtered.isEmpty
-                    ? Center(
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.center,
-                          children: [
-                            Icon(Icons.folder_open,
-                                size: 64, color: Colors.grey.shade400),
-                            const SizedBox(height: 12),
-                            Text('No records yet',
-                                style: TextStyle(
-                                    fontSize: 16,
-                                    color: Colors.grey.shade500)),
-                          ],
-                        ),
-                      )
-                    : RefreshIndicator(
-                        onRefresh: _loadFiles,
-                        child: ListView.builder(
-                          padding: const EdgeInsets.symmetric(
-                              horizontal: 12, vertical: 8),
-                          itemCount: _filtered.length,
-                          itemBuilder: (context, index) {
-                            final file = _filtered[index];
-                            final name =
-                                p.basenameWithoutExtension(file.path);
-                            final date = file.lastModifiedSync();
-                            final isSelected =
-                                _selected.contains(file.path);
+                ? Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.folder_open,
+                      size: 64, color: Colors.grey.shade400),
+                  const SizedBox(height: 12),
+                  Text('No records yet',
+                      style: TextStyle(
+                          fontSize: 16,
+                          color: Colors.grey.shade500)),
+                ],
+              ),
+            )
+                : RefreshIndicator(
+              onRefresh: loadFiles,
+              child: ListView.builder(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 12, vertical: 8),
+                itemCount: _filtered.length,
+                itemBuilder: (context, index) {
+                  final file = _filtered[index];
+                  final name =
+                  p.basenameWithoutExtension(file.path);
+                  final date = file.lastModifiedSync();
+                  final isSelected =
+                  _selected.contains(file.path);
 
-                            return _RecordCard(
-                              file: file,
-                              name: name,
-                              date: date,
-                              isSelected: isSelected,
-                              isSelecting: _isSelecting,
-                              onTap: () {
-                                if (_isSelecting) {
-                                  _toggleSelect(file.path);
-                                } else {
-                                  Navigator.of(context).push(
-                                    MaterialPageRoute(
-                                      builder: (_) => RecordDetailScreen(
-                                          file: file),
-                                    ),
-                                  );
-                                }
-                              },
-                              onDelete: () => _confirmSingleDelete(file),
-                              onSelect: () => _toggleSelect(file.path),
-                            );
-                          },
-                        ),
-                      ),
+                  return _RecordCard(
+                    file: file,
+                    name: name,
+                    date: date,
+                    isSelected: isSelected,
+                    isSelecting: _isSelecting,
+                    onTap: () {
+                      if (_isSelecting) {
+                        _toggleSelect(file.path);
+                      } else {
+                        Navigator.of(context).push(
+                          MaterialPageRoute(
+                            builder: (_) => RecordDetailScreen(
+                                file: file),
+                          ),
+                        );
+                      }
+                    },
+                    onDelete: () => _confirmSingleDelete(file),
+                    onSelect: () => _toggleSelect(file.path),
+                  );
+                },
+              ),
+            ),
           ),
 
           // Multi-select bottom bar
@@ -444,8 +449,8 @@ class _SortChip extends StatelessWidget {
 
   const _SortChip(
       {required this.label,
-      required this.selected,
-      required this.onTap});
+        required this.selected,
+        required this.onTap});
 
   @override
   Widget build(BuildContext context) {
@@ -453,7 +458,7 @@ class _SortChip extends StatelessWidget {
       onTap: onTap,
       child: Container(
         padding:
-            const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         decoration: BoxDecoration(
           color: selected
               ? const Color(0xFFE57373)
@@ -539,7 +544,7 @@ class _RecordCard extends StatelessWidget {
                         color: Colors.white,
                         borderRadius: BorderRadius.circular(6),
                         border:
-                            Border.all(color: Colors.grey.shade300),
+                        Border.all(color: Colors.grey.shade300),
                       ),
                       child: Text(name,
                           style: const TextStyle(fontSize: 12),
@@ -577,7 +582,7 @@ class _RecordCard extends StatelessWidget {
                       ),
                       child: isSelected
                           ? const Icon(Icons.check,
-                              size: 14, color: Colors.white)
+                          size: 14, color: Colors.white)
                           : null,
                     ),
                   ),

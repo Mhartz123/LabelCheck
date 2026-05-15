@@ -95,7 +95,7 @@ class _CameraScreenState extends State<CameraScreen>
   Future<Directory> _getPhotoDir() async {
     final Directory appDir = await getApplicationDocumentsDirectory();
     final Directory photoDir =
-        Directory(p.join(appDir.path, 'UI_Prototype_Photos'));
+    Directory(p.join(appDir.path, 'UI_Prototype_Photos'));
     if (!await photoDir.exists()) await photoDir.create(recursive: true);
     return photoDir;
   }
@@ -221,7 +221,7 @@ class _CameraScreenState extends State<CameraScreen>
                   const SizedBox(height: 6),
                   const Text('Example :',
                       style:
-                          TextStyle(fontSize: 12, color: Colors.black54)),
+                      TextStyle(fontSize: 12, color: Colors.black54)),
                   const Text(
                     'Loaf_of_bread.jpeg',
                     style: TextStyle(
@@ -261,16 +261,16 @@ class _CameraScreenState extends State<CameraScreen>
                           onPressed: (isEmpty || isTaken)
                               ? null
                               : () async {
-                                  final raw =
-                                      nameController.text.trim();
-                                  Navigator.of(context).pop();
-                                  await _savePhoto(tempPath, raw);
-                                },
+                            final raw =
+                            nameController.text.trim();
+                            Navigator.of(context).pop();
+                            await _savePhoto(tempPath, raw);
+                          },
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFF4CAF50),
                             foregroundColor: Colors.white,
                             disabledBackgroundColor:
-                                Colors.grey.shade300,
+                            Colors.grey.shade300,
                             shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(10)),
                             padding: const EdgeInsets.symmetric(
@@ -331,57 +331,57 @@ class _CameraScreenState extends State<CameraScreen>
       backgroundColor: Colors.black,
       body: _isReady && _controller != null
           ? Stack(
-              fit: StackFit.expand,
+        fit: StackFit.expand,
+        children: [
+          CameraPreview(_controller!),
+          Positioned(
+            bottom: 32,
+            left: 0,
+            right: 0,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
               children: [
-                CameraPreview(_controller!),
-                Positioned(
-                  bottom: 32,
-                  left: 0,
-                  right: 0,
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-                    children: [
-                      _CircleButton(
-                        color: Colors.black.withValues(alpha: 0.6),
-                        icon: Icons.flip_camera_android,
-                        iconColor: Colors.white,
-                        size: 52,
-                        onTap: _switchCamera,
-                      ),
-                      _CircleButton(
-                        color: Colors.white,
-                        icon: _isTaking ? null : Icons.circle,
-                        iconColor: Colors.white,
-                        size: 72,
-                        onTap: _isTaking ? null : _takePhoto,
-                        isShutter: true,
-                        isTaking: _isTaking,
-                      ),
-                      _CircleButton(
-                        color: Colors.grey.withValues(alpha: 0.6),
-                        icon: _isFlashOn
-                            ? Icons.flash_on
-                            : Icons.flash_off,
-                        iconColor: Colors.white,
-                        size: 52,
-                        onTap: _toggleFlash,
-                      ),
-                    ],
-                  ),
+                _CircleButton(
+                  color: Colors.black.withValues(alpha: 0.6),
+                  icon: Icons.flip_camera_android,
+                  iconColor: Colors.white,
+                  size: 52,
+                  onTap: _switchCamera,
+                ),
+                _CircleButton(
+                  color: Colors.white,
+                  icon: _isTaking ? null : Icons.circle,
+                  iconColor: Colors.white,
+                  size: 72,
+                  onTap: _isTaking ? null : _takePhoto,
+                  isShutter: true,
+                  isTaking: _isTaking,
+                ),
+                _CircleButton(
+                  color: Colors.grey.withValues(alpha: 0.6),
+                  icon: _isFlashOn
+                      ? Icons.flash_on
+                      : Icons.flash_off,
+                  iconColor: Colors.white,
+                  size: 52,
+                  onTap: _toggleFlash,
                 ),
               ],
-            )
-          : const Center(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  CircularProgressIndicator(color: Colors.white),
-                  SizedBox(height: 16),
-                  Text('Starting camera...',
-                      style: TextStyle(color: Colors.white)),
-                ],
-              ),
             ),
+          ),
+        ],
+      )
+          : const Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            CircularProgressIndicator(color: Colors.white),
+            SizedBox(height: 16),
+            Text('Starting camera...',
+                style: TextStyle(color: Colors.white)),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -418,14 +418,14 @@ class _CircleButton extends StatelessWidget {
           shape: BoxShape.circle,
           color: color,
           border:
-              isShutter ? Border.all(color: Colors.white, width: 4) : null,
+          isShutter ? Border.all(color: Colors.white, width: 4) : null,
         ),
         child: isTaking
             ? const Padding(
-                padding: EdgeInsets.all(16),
-                child: CircularProgressIndicator(
-                    strokeWidth: 2, color: Colors.black),
-              )
+          padding: EdgeInsets.all(16),
+          child: CircularProgressIndicator(
+              strokeWidth: 2, color: Colors.black),
+        )
             : Icon(icon, color: iconColor, size: size * 0.45),
       ),
     );
