@@ -20,6 +20,16 @@ class _CameraScreenState extends State<CameraScreen>
   bool _isFlashOn = false;
   int _cameraIndex = 0;
 
+  // Zoom
+  double _currentZoom = 1.0;
+  double _baseZoom = 1.0;
+  double _minZoom = 1.0;
+  double _maxZoom = 1.0;
+
+  // Focus
+  Offset? _focusPoint;
+  bool _showFocus = false;
+
   @override
   void initState() {
     super.initState();
@@ -31,6 +41,7 @@ class _CameraScreenState extends State<CameraScreen>
     if (globalCameras.isEmpty) return;
     final prev = _controller;
     if (prev != null) await prev.dispose();
+
     final controller = CameraController(
       globalCameras[index],
       ResolutionPreset.high,
@@ -39,6 +50,9 @@ class _CameraScreenState extends State<CameraScreen>
     _controller = controller;
     try {
       await controller.initialize();
+      _minZoom = await controller.getMinZoomLevel();
+      _maxZoom = await controller.getMaxZoomLevel();
+      _currentZoom = _minZoom;
       if (mounted) setState(() => _isReady = true);
     } catch (e) {
       debugPrint('Camera init error: $e');
@@ -77,6 +91,46 @@ class _CameraScreenState extends State<CameraScreen>
         .setFlashMode(_isFlashOn ? FlashMode.torch : FlashMode.off);
   }
 
+  // ── Pinch to zoom ──────────────────────────────────────────────────────────
+  void _onScaleStart(ScaleStartDetails details) {
+    _baseZoom = _currentZoom;
+  }
+
+  Future<void> _onScaleUpdate(ScaleUpdateDetails details) async {
+    if (_controller == null || !_controller!.value.isInitialized) return;
+    if (details.pointerCount < 2) return; // only act on pinch, not single tap
+    final newZoom = (_baseZoom * details.scale).clamp(_minZoom, _maxZoom);
+    if ((newZoom - _currentZoom).abs() < 0.01) return; // skip tiny changes
+    setState(() => _currentZoom = newZoom);
+    await _controller!.setZoomLevel(newZoom);
+  }
+
+  // ── Tap to focus ───────────────────────────────────────────────────────────
+  Future<void> _onTapFocus(TapUpDetails details) async {
+    if (_controller == null || !_controller!.value.isInitialized) return;
+    final RenderBox box = context.findRenderObject() as RenderBox;
+    final Offset localPos = box.globalToLocal(details.globalPosition);
+    final double x = (localPos.dx / box.size.width).clamp(0.0, 1.0);
+    final double y = (localPos.dy / box.size.height).clamp(0.0, 1.0);
+
+    try {
+      await _controller!.setFocusMode(FocusMode.auto);
+      await _controller!.setFocusPoint(Offset(x, y));
+      await _controller!.setExposurePoint(Offset(x, y));
+    } catch (e) {
+      debugPrint('Focus error: $e');
+    }
+
+    setState(() {
+      _focusPoint = localPos;
+      _showFocus = true;
+    });
+    Future.delayed(const Duration(milliseconds: 1500), () {
+      if (mounted) setState(() => _showFocus = false);
+    });
+  }
+
+  // ── Take photo ─────────────────────────────────────────────────────────────
   Future<void> _takePhoto() async {
     if (_controller == null || !_controller!.value.isInitialized) return;
     if (_isTaking) return;
@@ -91,7 +145,7 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
-  // ── Resolve the photos directory ─────────────────────────────────────────
+  // ── Resolve photos directory ───────────────────────────────────────────────
   Future<Directory> _getPhotoDir() async {
     final Directory appDir = await getApplicationDocumentsDirectory();
     final Directory photoDir =
@@ -100,7 +154,7 @@ class _CameraScreenState extends State<CameraScreen>
     return photoDir;
   }
 
-  // ── Check if a filename is already taken ─────────────────────────────────
+  // ── Check duplicate name ───────────────────────────────────────────────────
   Future<bool> _nameExists(String raw) async {
     if (raw.trim().isEmpty) return false;
     final dir = await _getPhotoDir();
@@ -110,7 +164,7 @@ class _CameraScreenState extends State<CameraScreen>
     return File(p.join(dir.path, fileName)).existsSync();
   }
 
-  // ── Frame 1.2 — Save Record bottom sheet ─────────────────────────────────
+  // ── Save Record bottom sheet ───────────────────────────────────────────────
   void _showSaveSheet(String tempPath) {
     final TextEditingController nameController = TextEditingController();
 
@@ -146,7 +200,6 @@ class _CameraScreenState extends State<CameraScreen>
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  // ── Title bar ───────────────────────────────────────────
                   Container(
                     width: double.infinity,
                     padding: const EdgeInsets.symmetric(
@@ -164,8 +217,6 @@ class _CameraScreenState extends State<CameraScreen>
                     ),
                   ),
                   const SizedBox(height: 14),
-
-                  // ── Name input ──────────────────────────────────────────
                   TextField(
                     controller: nameController,
                     autofocus: true,
@@ -175,7 +226,6 @@ class _CameraScreenState extends State<CameraScreen>
                       isDense: true,
                       contentPadding: const EdgeInsets.symmetric(
                           horizontal: 12, vertical: 10),
-                      // Border turns red when name is taken
                       enabledBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(8),
                         borderSide: BorderSide(
@@ -193,7 +243,6 @@ class _CameraScreenState extends State<CameraScreen>
                           width: 2,
                         ),
                       ),
-                      // Inline error message below the field
                       errorText: isTaken
                           ? 'This name is already taken. Please choose another.'
                           : null,
@@ -201,8 +250,8 @@ class _CameraScreenState extends State<CameraScreen>
                           color: Color(0xFFE57373), fontSize: 11),
                       errorBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(8),
-                        borderSide: const BorderSide(
-                            color: Color(0xFFE57373)),
+                        borderSide:
+                        const BorderSide(color: Color(0xFFE57373)),
                       ),
                       focusedErrorBorder: OutlineInputBorder(
                         borderRadius: BorderRadius.circular(8),
@@ -212,8 +261,6 @@ class _CameraScreenState extends State<CameraScreen>
                     ),
                   ),
                   const SizedBox(height: 10),
-
-                  // ── Instructions ────────────────────────────────────────
                   const Text(
                     '*Please input a name for the picture you just took.',
                     style: TextStyle(fontSize: 12, color: Colors.black54),
@@ -230,8 +277,6 @@ class _CameraScreenState extends State<CameraScreen>
                         fontWeight: FontWeight.w600),
                   ),
                   const SizedBox(height: 20),
-
-                  // ── Cancel / Save ───────────────────────────────────────
                   Row(
                     children: [
                       Expanded(
@@ -245,8 +290,8 @@ class _CameraScreenState extends State<CameraScreen>
                             foregroundColor: Colors.white,
                             shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(10)),
-                            padding: const EdgeInsets.symmetric(
-                                vertical: 14),
+                            padding:
+                            const EdgeInsets.symmetric(vertical: 14),
                           ),
                           child: const Text('Cancel',
                               style: TextStyle(
@@ -257,24 +302,21 @@ class _CameraScreenState extends State<CameraScreen>
                       const SizedBox(width: 12),
                       Expanded(
                         child: ElevatedButton(
-                          // Disabled if empty or name is taken
                           onPressed: (isEmpty || isTaken)
                               ? null
                               : () async {
-                            final raw =
-                            nameController.text.trim();
+                            final raw = nameController.text.trim();
                             Navigator.of(context).pop();
                             await _savePhoto(tempPath, raw);
                           },
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFF4CAF50),
                             foregroundColor: Colors.white,
-                            disabledBackgroundColor:
-                            Colors.grey.shade300,
+                            disabledBackgroundColor: Colors.grey.shade300,
                             shape: RoundedRectangleBorder(
                                 borderRadius: BorderRadius.circular(10)),
-                            padding: const EdgeInsets.symmetric(
-                                vertical: 14),
+                            padding:
+                            const EdgeInsets.symmetric(vertical: 14),
                           ),
                           child: const Text('Save',
                               style: TextStyle(
@@ -293,13 +335,12 @@ class _CameraScreenState extends State<CameraScreen>
     );
   }
 
-  // ── Save photo to app-private folder ─────────────────────────────────────
+  // ── Save photo ─────────────────────────────────────────────────────────────
   Future<void> _savePhoto(String tempPath, String rawName) async {
     try {
       final dir = await _getPhotoDir();
-      String fileName = rawName.endsWith('.jpeg')
-          ? rawName
-          : '$rawName.jpeg';
+      String fileName =
+      rawName.endsWith('.jpeg') ? rawName : '$rawName.jpeg';
       fileName = fileName.replaceAll(' ', '_');
       final String destPath = p.join(dir.path, fileName);
       await File(tempPath).copy(destPath);
@@ -324,16 +365,79 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
-  // ── Build ─────────────────────────────────────────────────────────────────
+  // ── Build ──────────────────────────────────────────────────────────────────
   @override
   Widget build(BuildContext context) {
+    if (!_isReady || _controller == null) {
+      return const Scaffold(
+        backgroundColor: Colors.black,
+        body: Center(
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              CircularProgressIndicator(color: Colors.white),
+              SizedBox(height: 16),
+              Text('Starting camera...',
+                  style: TextStyle(color: Colors.white)),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: Colors.black,
-      body: _isReady && _controller != null
-          ? Stack(
+      body: Stack(
         fit: StackFit.expand,
         children: [
-          CameraPreview(_controller!),
+          // Camera preview — GestureDetector wraps it for pinch + tap
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onScaleStart: _onScaleStart,
+            onScaleUpdate: _onScaleUpdate,
+            onTapUp: _onTapFocus,
+            child: CameraPreview(_controller!),
+          ),
+
+          // Focus square indicator
+          if (_showFocus && _focusPoint != null)
+            Positioned(
+              left: _focusPoint!.dx - 30,
+              top: _focusPoint!.dy - 30,
+              child: Container(
+                width: 60,
+                height: 60,
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.yellow, width: 2),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              ),
+            ),
+
+          // Zoom level badge
+          if (_currentZoom > _minZoom + 0.05)
+            Positioned(
+              top: 60,
+              left: 0,
+              right: 0,
+              child: Center(
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 10, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: Colors.black.withValues(alpha: 0.5),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Text(
+                    '${_currentZoom.toStringAsFixed(1)}x',
+                    style: const TextStyle(
+                        color: Colors.white, fontSize: 14),
+                  ),
+                ),
+              ),
+            ),
+
+          // Bottom controls — placed ABOVE gesture layer so buttons still work
           Positioned(
             bottom: 32,
             left: 0,
@@ -359,9 +463,7 @@ class _CameraScreenState extends State<CameraScreen>
                 ),
                 _CircleButton(
                   color: Colors.grey.withValues(alpha: 0.6),
-                  icon: _isFlashOn
-                      ? Icons.flash_on
-                      : Icons.flash_off,
+                  icon: _isFlashOn ? Icons.flash_on : Icons.flash_off,
                   iconColor: Colors.white,
                   size: 52,
                   onTap: _toggleFlash,
@@ -370,23 +472,12 @@ class _CameraScreenState extends State<CameraScreen>
             ),
           ),
         ],
-      )
-          : const Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            CircularProgressIndicator(color: Colors.white),
-            SizedBox(height: 16),
-            Text('Starting camera...',
-                style: TextStyle(color: Colors.white)),
-          ],
-        ),
       ),
     );
   }
 }
 
-// ── Circle button widget ──────────────────────────────────────────────────────
+// ── Circle button ──────────────────────────────────────────────────────────────
 
 class _CircleButton extends StatelessWidget {
   final Color color;
@@ -417,8 +508,9 @@ class _CircleButton extends StatelessWidget {
         decoration: BoxDecoration(
           shape: BoxShape.circle,
           color: color,
-          border:
-          isShutter ? Border.all(color: Colors.white, width: 4) : null,
+          border: isShutter
+              ? Border.all(color: Colors.white, width: 4)
+              : null,
         ),
         child: isTaking
             ? const Padding(
