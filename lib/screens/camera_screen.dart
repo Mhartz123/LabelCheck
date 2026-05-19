@@ -28,7 +28,6 @@ class _CameraScreenState extends State<CameraScreen>
 
   // Focus
   Offset? _focusPoint;
-  bool _showFocus = false;
 
   @override
   void initState() {
@@ -123,10 +122,6 @@ class _CameraScreenState extends State<CameraScreen>
 
     setState(() {
       _focusPoint = localPos;
-      _showFocus = true;
-    });
-    Future.delayed(const Duration(milliseconds: 1500), () {
-      if (mounted) setState(() => _showFocus = false);
     });
   }
 
@@ -399,18 +394,14 @@ class _CameraScreenState extends State<CameraScreen>
             child: CameraPreview(_controller!),
           ),
 
-          // Focus square indicator
-          if (_showFocus && _focusPoint != null)
+          // Focus circle indicator — always in tree, animates on each tap
+          if (_focusPoint != null)
             Positioned(
-              left: _focusPoint!.dx - 30,
-              top: _focusPoint!.dy - 30,
-              child: Container(
-                width: 60,
-                height: 60,
-                decoration: BoxDecoration(
-                  border: Border.all(color: Colors.yellow, width: 2),
-                  borderRadius: BorderRadius.circular(4),
-                ),
+              left: _focusPoint!.dx - 35,
+              top: _focusPoint!.dy - 35,
+              child: _FocusCircle(
+                key: ValueKey(_focusPoint), // new key = fresh animation on every tap
+                visible: true,
               ),
             ),
 
@@ -520,6 +511,90 @@ class _CircleButton extends StatelessWidget {
         )
             : Icon(icon, color: iconColor, size: size * 0.45),
       ),
+    );
+  }
+}
+
+// ── Focus circle animation ─────────────────────────────────────────────────────
+
+class _FocusCircle extends StatefulWidget {
+  final bool visible;
+  const _FocusCircle({super.key, required this.visible});
+
+  @override
+  State<_FocusCircle> createState() => _FocusCircleState();
+}
+
+class _FocusCircleState extends State<_FocusCircle>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _opacity;
+  late Animation<double> _scale;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    );
+
+    // Scale from slightly large → normal size (snappy lock-in feel)
+    _scale = Tween<double>(begin: 1.3, end: 1.0).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeOut),
+    );
+
+    // Fade in quickly, then fade out toward the end
+    _opacity = TweenSequence([
+      TweenSequenceItem(
+          tween: Tween<double>(begin: 0.0, end: 0.85), weight: 20),
+      TweenSequenceItem(
+          tween: Tween<double>(begin: 0.85, end: 0.85), weight: 50),
+      TweenSequenceItem(
+          tween: Tween<double>(begin: 0.85, end: 0.0), weight: 30),
+    ]).animate(_controller);
+
+    if (widget.visible) _controller.forward(from: 0);
+  }
+
+  @override
+  void didUpdateWidget(_FocusCircle oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.visible && !oldWidget.visible) {
+      _controller.forward(from: 0);
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AnimatedBuilder(
+      animation: _controller,
+      builder: (context, _) {
+        return Opacity(
+          opacity: _opacity.value,
+          child: Transform.scale(
+            scale: _scale.value,
+            child: Container(
+              width: 70,
+              height: 70,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                border: Border.all(
+                  color: Colors.white.withValues(alpha: 0.9),
+                  width: 1.5,
+                ),
+                color: Colors.white.withValues(alpha: 0.08),
+              ),
+            ),
+          ),
+        );
+      },
     );
   }
 }
