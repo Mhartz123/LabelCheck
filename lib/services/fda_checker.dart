@@ -1,3 +1,4 @@
+import 'package:flutter/material.dart';
 class FdaChecker {
   // ── BANNED / RECALLED products from FDA Philippines advisories ──
   static const List<String> _bannedKeywords = [
