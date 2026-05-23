@@ -76,6 +76,7 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
     //   _confidence = result.confidence;
     // });
     // ────────────────────────────────────────────────────────
+
     setState(() => _isChecking = false);
   }
 

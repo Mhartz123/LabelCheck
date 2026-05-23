@@ -108,6 +108,210 @@ class RecordsScreenState extends State<RecordsScreen> {
     });
   }
 
+  // ── Rename ───────────────────────────────────────────────────────────────
+  Future<bool> _nameExists(String fileName, String excludePath) async {
+    final dir = File(excludePath).parent;
+    final candidate = File(p.join(dir.path, fileName));
+    return candidate.existsSync() && candidate.path != excludePath;
+  }
+
+  void _confirmRename(File file) {
+    final currentName = p.basenameWithoutExtension(file.path);
+    final TextEditingController nameController =
+    TextEditingController(text: currentName);
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      isDismissible: false,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (context) {
+        bool isTaken = false;
+        bool isEmpty = false;
+
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            void onChanged(String val) async {
+              final newFileName = val.trim().endsWith('.jpeg')
+                  ? val.trim()
+                  : '${val.trim()}.jpeg';
+              final taken = val.trim().isEmpty
+                  ? false
+                  : await _nameExists(newFileName, file.path);
+              setSheetState(() {
+                isTaken = taken;
+                isEmpty = val.trim().isEmpty;
+              });
+            }
+
+            return Padding(
+              padding: EdgeInsets.only(
+                left: 20,
+                right: 20,
+                top: 20,
+                bottom: MediaQuery.of(context).viewInsets.bottom + 20,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Title bar
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 14, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFD4A847),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Text(
+                      'User Instruction - Rename Record',
+                      style: TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 14),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  // Input
+                  TextField(
+                    controller: nameController,
+                    autofocus: true,
+                    onChanged: onChanged,
+                    decoration: InputDecoration(
+                      hintText: 'Enter new name',
+                      isDense: true,
+                      contentPadding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 10),
+                      enabledBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide(
+                          color: isTaken
+                              ? const Color(0xFFE57373)
+                              : Colors.grey.shade400,
+                        ),
+                      ),
+                      focusedBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: BorderSide(
+                          color: isTaken
+                              ? const Color(0xFFE57373)
+                              : const Color(0xFF4CAF50),
+                          width: 2,
+                        ),
+                      ),
+                      errorText: isTaken
+                          ? 'This name is already taken. Please choose another.'
+                          : null,
+                      errorStyle: const TextStyle(
+                          color: Color(0xFFE57373), fontSize: 11),
+                      errorBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide:
+                        const BorderSide(color: Color(0xFFE57373)),
+                      ),
+                      focusedErrorBorder: OutlineInputBorder(
+                        borderRadius: BorderRadius.circular(8),
+                        borderSide: const BorderSide(
+                            color: Color(0xFFE57373), width: 2),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Text('Current name: $currentName.jpeg',
+                      style: const TextStyle(
+                          fontSize: 11, color: Colors.black45)),
+                  const SizedBox(height: 20),
+                  // Buttons
+                  Row(
+                    children: [
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: () => Navigator.of(context).pop(),
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFFE57373),
+                            foregroundColor: Colors.white,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10)),
+                            padding:
+                            const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                          child: const Text('Cancel',
+                              style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.bold)),
+                        ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: (isEmpty || isTaken)
+                              ? null
+                              : () async {
+                            final raw =
+                            nameController.text.trim();
+                            Navigator.of(context).pop();
+                            await _renameFile(file, raw);
+                          },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFF4CAF50),
+                            foregroundColor: Colors.white,
+                            disabledBackgroundColor:
+                            Colors.grey.shade300,
+                            shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10)),
+                            padding:
+                            const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                          child: const Text('Confirm',
+                              style: TextStyle(
+                                  fontSize: 15,
+                                  fontWeight: FontWeight.bold)),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _renameFile(File file, String newName) async {
+    try {
+      String newFileName =
+      newName.endsWith('.jpeg') ? newName : '$newName.jpeg';
+      newFileName = newFileName.replaceAll(' ', '_');
+      final String newPath =
+      p.join(file.parent.path, newFileName);
+      await file.rename(newPath);
+      loadFiles();
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Renamed to "$newFileName"'),
+            backgroundColor: const Color(0xFF4CAF50),
+          ),
+        );
+      }
+    } catch (e) {
+      debugPrint('Rename error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Failed to rename file.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
   // Single delete confirmation
   void _confirmSingleDelete(File file) {
     showModalBottomSheet(
@@ -398,6 +602,7 @@ class RecordsScreenState extends State<RecordsScreen> {
                     },
                     onDelete: () => _confirmSingleDelete(file),
                     onSelect: () => _toggleSelect(file.path),
+                    onRename: () => _confirmRename(file),
                   );
                 },
               ),
@@ -489,6 +694,7 @@ class _RecordCard extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback onDelete;
   final VoidCallback onSelect;
+  final VoidCallback onRename;
 
   const _RecordCard({
     required this.file,
@@ -499,6 +705,7 @@ class _RecordCard extends StatelessWidget {
     required this.onTap,
     required this.onDelete,
     required this.onSelect,
+    required this.onRename,
   });
 
   String _formatDate(DateTime dt) =>
@@ -537,18 +744,27 @@ class _RecordCard extends StatelessWidget {
                       style: TextStyle(
                           fontSize: 13, fontWeight: FontWeight.w600)),
                   Expanded(
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(
-                          horizontal: 8, vertical: 4),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(6),
-                        border:
-                        Border.all(color: Colors.grey.shade300),
+                    child: GestureDetector(
+                      onTap: onRename,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: Colors.white,
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: Colors.grey.shade300),
+                        ),
+                        child: Row(
+                          children: [
+                            Expanded(
+                              child: Text(name,
+                                  style: const TextStyle(fontSize: 12),
+                                  overflow: TextOverflow.ellipsis),
+                            ),
+                            Icon(Icons.edit, size: 12, color: Colors.grey.shade400),
+                          ],
+                        ),
                       ),
-                      child: Text(name,
-                          style: const TextStyle(fontSize: 12),
-                          overflow: TextOverflow.ellipsis),
                     ),
                   ),
                   const SizedBox(width: 6),
