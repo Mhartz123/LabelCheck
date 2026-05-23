@@ -3,9 +3,10 @@ import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
-import '../main.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
-import '../services/fda_checker.dart';
+import '../../services/fda_checker.dart';
+import '../../services/scan_store.dart';
+import 'package:permission_handler/permission_handler.dart';
 import 'result_screen.dart';
 
 class CameraScreen extends StatefulWidget {
@@ -22,6 +23,7 @@ class _CameraScreenState extends State<CameraScreen>
   bool _isTaking = false;
   bool _isFlashOn = false;
   int _cameraIndex = 0;
+  List<CameraDescription> _cameras = [];
 
   // Zoom
   double _currentZoom = 1.0;
@@ -36,16 +38,33 @@ class _CameraScreenState extends State<CameraScreen>
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    _loadCameras();
+  }
+
+  Future<void> _loadCameras() async {
+    // Request storage + camera permissions before anything else
+    await _requestPermissions();
+    _cameras = await availableCameras();
     _initCamera(_cameraIndex);
   }
 
+  Future<void> _requestPermissions() async {
+    await Permission.camera.request();
+    if (await Permission.photos.isDenied) await Permission.photos.request();
+    if (await Permission.storage.isDenied) await Permission.storage.request();
+    // Android 11+ needs MANAGE_EXTERNAL_STORAGE for /storage/emulated/0
+    if (!await Permission.manageExternalStorage.isGranted) {
+      await Permission.manageExternalStorage.request();
+    }
+  }
+
   Future<void> _initCamera(int index) async {
-    if (globalCameras.isEmpty) return;
+    if (_cameras.isEmpty) return;
     final prev = _controller;
     if (prev != null) await prev.dispose();
 
     final controller = CameraController(
-      globalCameras[index],
+      _cameras[index],
       ResolutionPreset.high,
       enableAudio: false,
     );
@@ -80,9 +99,9 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   Future<void> _switchCamera() async {
-    if (globalCameras.length < 2) return;
+    if (_cameras.length < 2) return;
     setState(() => _isReady = false);
-    _cameraIndex = (_cameraIndex + 1) % globalCameras.length;
+    _cameraIndex = (_cameraIndex + 1) % _cameras.length;
     await _initCamera(_cameraIndex);
   }
 
@@ -137,29 +156,26 @@ class _CameraScreenState extends State<CameraScreen>
     try {
       final XFile photo = await _controller!.takePicture();
 
-      // Run ML Kit OCR on the captured image
+      // Run ML Kit OCR
       final inputImage = InputImage.fromFilePath(photo.path);
       final textRecognizer = TextRecognizer();
       final RecognizedText recognizedText =
       await textRecognizer.processImage(inputImage);
       await textRecognizer.close();
 
-      // Classify extracted text against FDA database
       final String extractedText = recognizedText.text;
       final ScanResult result = FdaChecker.classify(extractedText);
 
-      // Navigate to result screen
+      // Show result screen first, then ask to save
       if (mounted) {
-        Navigator.of(context).push(
+        await Navigator.of(context).push(
           MaterialPageRoute(
             builder: (_) => ResultScreen(result: result),
           ),
         );
+        // After user returns from result screen, show save sheet
+        if (mounted) _showSaveSheet(photo.path, result);
       }
-
-      // Clean up temp photo
-      File(photo.path).deleteSync();
-
     } catch (e) {
       debugPrint('Scan error: $e');
       if (mounted) {
@@ -177,9 +193,8 @@ class _CameraScreenState extends State<CameraScreen>
 
   // ── Resolve photos directory ───────────────────────────────────────────────
   Future<Directory> _getPhotoDir() async {
-    final Directory appDir = await getApplicationDocumentsDirectory();
-    final Directory photoDir =
-    Directory(p.join(appDir.path, 'UI_Prototype_Photos'));
+    const String publicPictures = '/storage/emulated/0/Pictures/VeriFyDA';
+    final Directory photoDir = Directory(publicPictures);
     if (!await photoDir.exists()) await photoDir.create(recursive: true);
     return photoDir;
   }
@@ -195,7 +210,7 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   // ── Save Record bottom sheet ───────────────────────────────────────────────
-  void _showSaveSheet(String tempPath) {
+  void _showSaveSheet(String tempPath, ScanResult result) {
     final TextEditingController nameController = TextEditingController();
 
     showModalBottomSheet(
@@ -337,7 +352,7 @@ class _CameraScreenState extends State<CameraScreen>
                               : () async {
                             final raw = nameController.text.trim();
                             Navigator.of(context).pop();
-                            await _savePhoto(tempPath, raw);
+                            await _savePhoto(tempPath, raw, result);
                           },
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFF4CAF50),
@@ -366,7 +381,7 @@ class _CameraScreenState extends State<CameraScreen>
   }
 
   // ── Save photo ─────────────────────────────────────────────────────────────
-  Future<void> _savePhoto(String tempPath, String rawName) async {
+  Future<void> _savePhoto(String tempPath, String rawName, ScanResult result) async {
     try {
       final dir = await _getPhotoDir();
       String fileName =
@@ -374,6 +389,15 @@ class _CameraScreenState extends State<CameraScreen>
       fileName = fileName.replaceAll(' ', '_');
       final String destPath = p.join(dir.path, fileName);
       await File(tempPath).copy(destPath);
+
+      // Save scan result alongside the photo
+      await ScanStore.save(
+        photoPath: destPath,
+        status: result.statusLabel,
+        matchedKeyword: result.matchedKeyword,
+        extractedText: result.extractedText,
+      );
+
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
@@ -382,13 +406,14 @@ class _CameraScreenState extends State<CameraScreen>
           ),
         );
       }
-    } catch (e) {
-      debugPrint('Save photo error: $e');
+    } catch (e, st) {
+      debugPrint('Save photo error: $e\n$st');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to save photo.'),
+          SnackBar(
+            content: Text('Save failed: $e'),
             backgroundColor: Colors.red,
+            duration: const Duration(seconds: 6),
           ),
         );
       }

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'record_detail_screen.dart';
+import '../../services/scan_store.dart';
 
 class RecordsScreen extends StatefulWidget {
   const RecordsScreen({super.key});
@@ -34,9 +35,10 @@ class RecordsScreenState extends State<RecordsScreen> {
   Future<void> loadFiles() async {
     setState(() => _loading = true);
     try {
-      final Directory appDir = await getApplicationDocumentsDirectory();
+      final Directory? extDir = await getExternalStorageDirectory();
+      final String rootPath = extDir!.path.split('Android').first;
       final Directory photoDir =
-      Directory(p.join(appDir.path, 'UI_Prototype_Photos'));
+      Directory(p.join(rootPath, 'Pictures', 'VeriFyDA'));
       if (!await photoDir.exists()) {
         setState(() {
           _allFiles = [];
@@ -289,6 +291,10 @@ class RecordsScreenState extends State<RecordsScreen> {
       newFileName = newFileName.replaceAll(' ', '_');
       final String newPath =
       p.join(file.parent.path, newFileName);
+
+      // Rename JSON sidecar first
+      await ScanStore.rename(file.path, newPath);
+
       await file.rename(newPath);
       loadFiles();
       if (mounted) {
@@ -375,6 +381,7 @@ class RecordsScreenState extends State<RecordsScreen> {
                   child: ElevatedButton(
                     onPressed: () async {
                       Navigator.of(context).pop();
+                      ScanStore.delete(file.path); // delete JSON sidecar
                       await file.delete();
                       loadFiles();
                     },
@@ -462,6 +469,7 @@ class RecordsScreenState extends State<RecordsScreen> {
                     onPressed: () async {
                       Navigator.of(context).pop();
                       for (final path in _selected) {
+                        ScanStore.delete(path); // delete JSON sidecar
                         await File(path).delete();
                       }
                       _unselectAll();
@@ -806,26 +814,58 @@ class _RecordCard extends StatelessWidget {
               ),
               const SizedBox(height: 8),
 
-              // Compliance / Confidence (placeholder)
-              Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: Colors.grey.shade200),
-                ),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: const [
-                    Text('Compliance Status :',
-                        style: TextStyle(fontSize: 12)),
-                    SizedBox(height: 4),
-                    Text('Confidence Rate    :',
-                        style: TextStyle(fontSize: 12)),
-                  ],
-                ),
-              ),
+              // Compliance — reads from saved JSON
+              Builder(builder: (_) {
+                final data = ScanStore.load(file.path);
+                final status = data?['status'] as String? ?? '—';
+                final keyword = data?['matchedKeyword'] as String? ?? '—';
+
+                Color statusColor = Colors.grey;
+                if (status == 'COMPLIANT') statusColor = const Color(0xFF4CAF50);
+                if (status == 'NON-COMPLIANT') statusColor = const Color(0xFFFF9800);
+                if (status == 'WARNING / BANNED') statusColor = const Color(0xFFF44336);
+
+                return Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: Colors.grey.shade200),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Text('Compliance Status : ',
+                              style: TextStyle(fontSize: 12)),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                                horizontal: 8, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: statusColor,
+                              borderRadius: BorderRadius.circular(4),
+                            ),
+                            child: Text(
+                              status,
+                              style: const TextStyle(
+                                  fontSize: 11,
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 4),
+                      Text('Detection Basis    : $keyword',
+                          style: const TextStyle(
+                              fontSize: 12, color: Colors.black54),
+                          overflow: TextOverflow.ellipsis),
+                    ],
+                  ),
+                );
+              }),
             ],
           ),
         ),

@@ -1,6 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
+import '../../services/scan_store.dart';
 
 enum ComplianceStatus { compliant, nonCompliant, banned, unknown }
 
@@ -64,19 +65,35 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
       '${dt.year}-${_pad(dt.month)}-${_pad(dt.day)}  ${_pad(dt.hour)}:${_pad(dt.minute)}';
   String _pad(int n) => n.toString().padLeft(2, '0');
 
-  /// TODO: Replace with actual model inference call.
+  @override
+  void initState() {
+    super.initState();
+    _loadSavedResult(); // load on open
+  }
+
+  void _loadSavedResult() {
+    final data = ScanStore.load(widget.file.path);
+    if (data != null) {
+      final statusStr = data['status'] as String? ?? '';
+      setState(() {
+        _status = _statusFromString(statusStr);
+        _productType = 'OTC Food Supplement';
+        _confidence = 1.0; // keyword match = 100% confidence
+      });
+    }
+  }
+
+  ComplianceStatus _statusFromString(String s) {
+    if (s == 'COMPLIANT') return ComplianceStatus.compliant;
+    if (s == 'WARNING / BANNED') return ComplianceStatus.banned;
+    if (s == 'NON-COMPLIANT') return ComplianceStatus.nonCompliant;
+    return ComplianceStatus.unknown;
+  }
+
   Future<void> _runComplianceCheck() async {
     setState(() => _isChecking = true);
-    await Future.delayed(const Duration(seconds: 1));
-    // ── INSERT MODEL CALL HERE ──────────────────────────────
-    // final result = await MyModel.predict(widget.file);
-    // setState(() {
-    //   _status = result.status;
-    //   _productType = result.productType;
-    //   _confidence = result.confidence;
-    // });
-    // ────────────────────────────────────────────────────────
-
+    await Future.delayed(const Duration(milliseconds: 500));
+    _loadSavedResult();
     setState(() => _isChecking = false);
   }
 
