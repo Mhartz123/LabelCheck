@@ -4,6 +4,9 @@ import 'package:camera/camera.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import '../main.dart';
+import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
+import '../services/fda_checker.dart';
+import 'result_screen.dart';
 
 class CameraScreen extends StatefulWidget {
   const CameraScreen({super.key});
@@ -130,11 +133,43 @@ class _CameraScreenState extends State<CameraScreen>
     if (_controller == null || !_controller!.value.isInitialized) return;
     if (_isTaking) return;
     setState(() => _isTaking = true);
+
     try {
       final XFile photo = await _controller!.takePicture();
-      if (mounted) _showSaveSheet(photo.path);
+
+      // Run ML Kit OCR on the captured image
+      final inputImage = InputImage.fromFilePath(photo.path);
+      final textRecognizer = TextRecognizer();
+      final RecognizedText recognizedText =
+      await textRecognizer.processImage(inputImage);
+      await textRecognizer.close();
+
+      // Classify extracted text against FDA database
+      final String extractedText = recognizedText.text;
+      final ScanResult result = FdaChecker.classify(extractedText);
+
+      // Navigate to result screen
+      if (mounted) {
+        Navigator.of(context).push(
+          MaterialPageRoute(
+            builder: (_) => ResultScreen(result: result),
+          ),
+        );
+      }
+
+      // Clean up temp photo
+      File(photo.path).deleteSync();
+
     } catch (e) {
-      debugPrint('Take photo error: $e');
+      debugPrint('Scan error: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Scan failed. Try again.'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     } finally {
       if (mounted) setState(() => _isTaking = false);
     }
