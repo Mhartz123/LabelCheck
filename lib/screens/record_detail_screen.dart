@@ -1,7 +1,7 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
-import '../../services/scan_store.dart';
+import '../services/scan_store.dart';
 
 enum ComplianceStatus { compliant, nonCompliant, banned, unknown }
 

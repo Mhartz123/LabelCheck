@@ -1,5 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../services/fda_checker.dart';
+import '../services/fda_checker.dart';
 
 class ResultScreen extends StatelessWidget {
   final ScanResult result;

@@ -60,8 +60,8 @@ class FdaChecker {
       }
     }
 
-    // Needs at least (2)? 1 compliant signals to be considered compliant
-    if (compliantScore >= 1) {
+    // Needs at least 2 compliant signals to be considered compliant
+    if (compliantScore >= 2) {
       return ScanResult(
         status: ComplianceStatus.compliant,
         matchedKeyword: matched,

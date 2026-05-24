@@ -3,7 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'record_detail_screen.dart';
-import '../../services/scan_store.dart';
+import '../services/scan_store.dart';
 
 class RecordsScreen extends StatefulWidget {
   const RecordsScreen({super.key});
@@ -35,10 +35,9 @@ class RecordsScreenState extends State<RecordsScreen> {
   Future<void> loadFiles() async {
     setState(() => _loading = true);
     try {
-      final Directory? extDir = await getExternalStorageDirectory();
-      final String rootPath = extDir!.path.split('Android').first;
+      final Directory appDir = await getApplicationDocumentsDirectory();
       final Directory photoDir =
-      Directory(p.join(rootPath, 'Pictures', 'VeriFyDA'));
+      Directory(p.join(appDir.path, 'UI_Prototype_Photos'));
       if (!await photoDir.exists()) {
         setState(() {
           _allFiles = [];
