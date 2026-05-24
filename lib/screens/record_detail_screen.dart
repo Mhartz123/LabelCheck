@@ -59,7 +59,6 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
   ComplianceStatus _status = ComplianceStatus.unknown;
   String _productType = '—';
   double? _confidence;
-  bool _isChecking = false;
 
   String _formatDate(DateTime dt) =>
       '${dt.year}-${_pad(dt.month)}-${_pad(dt.day)}  ${_pad(dt.hour)}:${_pad(dt.minute)}';
@@ -88,13 +87,6 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
     if (s == 'WARNING / BANNED') return ComplianceStatus.banned;
     if (s == 'NON-COMPLIANT') return ComplianceStatus.nonCompliant;
     return ComplianceStatus.unknown;
-  }
-
-  Future<void> _runComplianceCheck() async {
-    setState(() => _isChecking = true);
-    await Future.delayed(const Duration(milliseconds: 500));
-    _loadSavedResult();
-    setState(() => _isChecking = false);
   }
 
   @override
@@ -184,25 +176,7 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
                 ),
               ),
             ),
-            const SizedBox(height: 20),
 
-            // Check button
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: _isChecking ? null : _runComplianceCheck,
-                style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF4CAF50),
-                  foregroundColor: Colors.white,
-                  disabledBackgroundColor: Colors.grey.shade300,
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-                  padding: const EdgeInsets.symmetric(vertical: 14),
-                ),
-                child: _isChecking
-                    ? const SizedBox(height: 20, width: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                    : const Text('Run Compliance Check', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
-              ),
-            ),
           ],
         ),
       ),

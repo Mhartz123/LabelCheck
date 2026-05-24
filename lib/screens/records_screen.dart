@@ -16,6 +16,9 @@ class RecordsScreenState extends State<RecordsScreen> {
   List<File> _allFiles = [];
   List<File> _filtered = [];
   String _sortBy = 'Name';
+  bool _nameAscending = true;
+  bool _dateNewest = true;
+  String _complianceFilter = '';
   String _searchQuery = '';
   final Set<String> _selected = {};
   bool _isSelecting = false;
@@ -36,8 +39,7 @@ class RecordsScreenState extends State<RecordsScreen> {
     setState(() => _loading = true);
     try {
       final Directory appDir = await getApplicationDocumentsDirectory();
-      final Directory photoDir =
-      Directory(p.join(appDir.path, 'UI_Prototype_Photos'));
+      final Directory photoDir = Directory(p.join(appDir.path, 'UI_Prototype_Photos'));
       if (!await photoDir.exists()) {
         setState(() {
           _allFiles = [];
@@ -64,20 +66,25 @@ class RecordsScreenState extends State<RecordsScreen> {
     List<File> list = List.from(_allFiles);
     if (_searchQuery.isNotEmpty) {
       list = list
-          .where((f) => p
-          .basename(f.path)
-          .toLowerCase()
-          .contains(_searchQuery.toLowerCase()))
+          .where((f) => p.basename(f.path).toLowerCase().contains(_searchQuery.toLowerCase()))
           .toList();
     }
-    if (_sortBy == 'Name') {
-      list.sort((a, b) =>
-          p.basename(a.path).compareTo(p.basename(b.path)));
-    } else if (_sortBy == 'Date') {
-      list.sort((a, b) =>
-          b.lastModifiedSync().compareTo(a.lastModifiedSync()));
+    if (_complianceFilter.isNotEmpty) {
+      list = list.where((f) {
+        final data = ScanStore.load(f.path);
+        final status = data?['status'] as String? ?? '';
+        return status == _complianceFilter;
+      }).toList();
     }
-    // Compliance sort is non-functional for now
+    if (_sortBy == 'Name') {
+      list.sort((a, b) => _nameAscending
+          ? p.basename(a.path).compareTo(p.basename(b.path))
+          : p.basename(b.path).compareTo(p.basename(a.path)));
+    } else if (_sortBy == 'Date') {
+      list.sort((a, b) => _dateNewest
+          ? b.lastModifiedSync().compareTo(a.lastModifiedSync())
+          : a.lastModifiedSync().compareTo(b.lastModifiedSync()));
+    }
     setState(() => _filtered = list);
   }
 
@@ -106,6 +113,13 @@ class RecordsScreenState extends State<RecordsScreen> {
     setState(() {
       _selected.clear();
       _isSelecting = false;
+    });
+  }
+
+  void _selectAll() {
+    setState(() {
+      _selected.addAll(_filtered.map((f) => f.path));
+      _isSelecting = _selected.isNotEmpty;
     });
   }
 
@@ -510,28 +524,84 @@ class RecordsScreenState extends State<RecordsScreen> {
         children: [
           // Sort bar
           Padding(
-            padding:
-            const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            child: Row(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Sort By :',
-                    style: TextStyle(
-                        fontSize: 13, fontWeight: FontWeight.w500)),
-                const SizedBox(width: 8),
-                _SortChip(
-                    label: 'Name',
-                    selected: _sortBy == 'Name',
-                    onTap: () => _onSortChanged('Name')),
-                const SizedBox(width: 6),
-                _SortChip(
-                    label: 'Date',
-                    selected: _sortBy == 'Date',
-                    onTap: () => _onSortChanged('Date')),
-                const SizedBox(width: 6),
-                _SortChip(
-                    label: 'Compliance',
-                    selected: _sortBy == 'Compliance',
-                    onTap: () => _onSortChanged('Compliance')),
+                Row(
+                  children: [
+                    const Text('Sort :',
+                        style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+                    const SizedBox(width: 8),
+                    _SortChip(
+                        label: _sortBy == 'Name'
+                            ? (_nameAscending ? 'Name A→Z' : 'Name Z→A')
+                            : 'Name A→Z',
+                        selected: _sortBy == 'Name',
+                        onTap: () {
+                          if (_sortBy == 'Name') {
+                            setState(() => _nameAscending = !_nameAscending);
+                          } else {
+                            setState(() { _sortBy = 'Name'; _nameAscending = true; });
+                          }
+                          _applySort();
+                        }),
+                    const SizedBox(width: 6),
+                    _SortChip(
+                        label: _sortBy == 'Date'
+                            ? (_dateNewest ? 'Date Latest' : 'Date Oldest')
+                            : 'Date Latest',
+                        selected: _sortBy == 'Date',
+                        onTap: () {
+                          if (_sortBy == 'Date') {
+                            setState(() => _dateNewest = !_dateNewest);
+                          } else {
+                            setState(() { _sortBy = 'Date'; _dateNewest = true; });
+                          }
+                          _applySort();
+                        }),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    children: [
+                      const Text('Filter :',
+                          style: TextStyle(fontSize: 13, fontWeight: FontWeight.w500)),
+                      const SizedBox(width: 8),
+                      _SortChip(
+                          label: 'Compliant',
+                          selected: _complianceFilter == 'COMPLIANT',
+                          color: const Color(0xFF4CAF50),
+                          onTap: () {
+                            setState(() => _complianceFilter =
+                            _complianceFilter == 'COMPLIANT' ? '' : 'COMPLIANT');
+                            _applySort();
+                          }),
+                      const SizedBox(width: 6),
+                      _SortChip(
+                          label: 'Non-Compliant',
+                          selected: _complianceFilter == 'NON-COMPLIANT',
+                          color: const Color(0xFFFF9800),
+                          onTap: () {
+                            setState(() => _complianceFilter =
+                            _complianceFilter == 'NON-COMPLIANT' ? '' : 'NON-COMPLIANT');
+                            _applySort();
+                          }),
+                      const SizedBox(width: 6),
+                      _SortChip(
+                          label: 'Banned',
+                          selected: _complianceFilter == 'WARNING / BANNED',
+                          color: const Color(0xFFF44336),
+                          onTap: () {
+                            setState(() => _complianceFilter =
+                            _complianceFilter == 'WARNING / BANNED' ? '' : 'WARNING / BANNED');
+                            _applySort();
+                          }),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
@@ -621,10 +691,16 @@ class RecordsScreenState extends State<RecordsScreen> {
             Container(
               color: Colors.white,
               padding: const EdgeInsets.symmetric(
-                  horizontal: 20, vertical: 12),
+                  horizontal: 12, vertical: 12),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
+                  TextButton.icon(
+                    onPressed: _selectAll,
+                    icon: const Icon(Icons.select_all, color: Colors.black54),
+                    label: const Text('Select All',
+                        style: TextStyle(color: Colors.black54)),
+                  ),
                   TextButton.icon(
                     onPressed: _unselectAll,
                     icon: const Icon(Icons.check_box_outline_blank,
@@ -658,23 +734,24 @@ class _SortChip extends StatelessWidget {
   final String label;
   final bool selected;
   final VoidCallback onTap;
+  final Color? color;
 
-  const _SortChip(
-      {required this.label,
-        required this.selected,
-        required this.onTap});
+  const _SortChip({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+    this.color,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final activeColor = color ?? const Color(0xFFE57373);
     return GestureDetector(
       onTap: onTap,
       child: Container(
-        padding:
-        const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         decoration: BoxDecoration(
-          color: selected
-              ? const Color(0xFFE57373)
-              : Colors.grey.shade200,
+          color: selected ? activeColor : Colors.grey.shade200,
           borderRadius: BorderRadius.circular(6),
         ),
         child: Text(

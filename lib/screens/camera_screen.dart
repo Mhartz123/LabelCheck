@@ -143,7 +143,7 @@ class _CameraScreenState extends State<CameraScreen>
       final inputImage = InputImage.fromFilePath(photo.path);
       final textRecognizer = TextRecognizer();
       final RecognizedText recognizedText =
-          await textRecognizer.processImage(inputImage);
+      await textRecognizer.processImage(inputImage);
       await textRecognizer.close();
 
       final String extractedText = recognizedText.text;
