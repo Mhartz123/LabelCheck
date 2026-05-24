@@ -512,22 +512,20 @@
 // ════════════════════════════════════════════════════════════
 const STORE_KEY = 'labelcheck-reports';
 
+const SERVER = 'http://localhost:8080';
+
 async function storeGet() {
-  if (window.storage) {
-    try {
-      const r = await window.storage.get(STORE_KEY, true); // shared=true
-      return r ? JSON.parse(r.value) : [];
-    } catch { return []; }
+  try {
+    const res = await fetch(SERVER + '/api/reports');
+    const json = await res.json();
+    return json.reports || [];
+  } catch {
+    return [];
   }
-  try { return JSON.parse(localStorage.getItem(STORE_KEY) || '[]'); } catch { return []; }
 }
 
 async function storeSet(data) {
-  const val = JSON.stringify(data);
-  if (window.storage) {
-    try { await window.storage.set(STORE_KEY, val, true); return; } catch {}
-  }
-  localStorage.setItem(STORE_KEY, val);
+  // Writing is handled by the server — nothing to do here
 }
 
 // ════════════════════════════════════════════════════════════

@@ -17,7 +17,7 @@ class ReportService {
   // Replace with the URL where your dashboard is hosted.
   // If running locally for testing, use your machine's LAN IP, e.g.:
   //   http://192.168.1.100:8080/api/report
-  static const String _endpoint = 'http://192.168.1.100:8080/api/report';
+  static const String _endpoint = 'http://192.168.1.9:8080/api/report';
 
   // Set to false to disable image uploads (saves bandwidth).
   static const bool _includeImage = true;

@@ -17,6 +17,7 @@ class FdaChecker {
     'no approved therapeutic claims',
     'manufactured by', 'distributed by',
     'store at', 'keep out of reach',
+
   ];
 
   // ── Keywords that indicate NON-COMPLIANT ──
