@@ -7,6 +7,7 @@
  *  3. Serves the dashboard HTML at GET /
  *
  * Setup:
+ *   npx kill-port 8080
  *   node labelcheck_server.js
  *
  * Or with a custom port:
@@ -111,6 +112,19 @@ const server = http.createServer(async (req, res) => {
     saveReports(reports);
     console.log(`[+] Report received: ${body.productName} — ${body.status}`);
     return json(res, 200, { ok: true, id: body.id });
+  }
+
+  // ── POST /api/reports/delete — delete reports by id array ──────────────────
+  if (method === 'POST' && url === '/api/reports/delete') {
+    let body;
+    try { body = await readBody(req); }
+    catch { return json(res, 400, { ok: false, reason: 'invalid JSON' }); }
+
+    const ids = new Set(body.ids || []);
+    const reports = loadReports().filter(r => !ids.has(r.id));
+    saveReports(reports);
+    console.log(`[-] Deleted ${ids.size} report(s)`);
+    return json(res, 200, { ok: true, deleted: ids.size });
   }
 
   // 404 fallback

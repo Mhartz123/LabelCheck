@@ -9,14 +9,13 @@ class FdaChecker {
     'beauty whitening capsule', 'whitening glutathione injection',
     'herbal kidney cure', 'sibutramine', 'phenolphthalein',
     'undeclared pharmaceutical', 'not for human consumption',
+    'pediafortan','nutrilin'
+
   ];
 
   // ── Keywords that indicate a COMPLIANT label ──
   static const List<String> _compliantKeywords = [
-    'fda reg', 'fr-', 'food supplement',
-    'no approved therapeutic claims',
-    'manufactured by', 'distributed by',
-    'store at', 'keep out of reach',
+    'pedzinc','pedcee',
 
   ];
 
@@ -62,7 +61,7 @@ class FdaChecker {
     }
 
     // Needs at least 2 compliant signals to be considered compliant
-    if (compliantScore >= 2) {
+    if (compliantScore >= 1) {
       return ScanResult(
         status: ComplianceStatus.compliant,
         matchedKeyword: matched,
