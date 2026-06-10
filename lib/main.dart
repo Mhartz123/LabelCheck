@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
 import 'screens/splash_screen.dart';
+import 'screens/home_screen.dart';
 import 'screens/camera_screen.dart';
 import 'screens/records_screen.dart';
 
@@ -18,7 +19,7 @@ class UIPrototypeApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'UI Prototype',
+      title: 'VerifyDA',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
@@ -32,6 +33,8 @@ class UIPrototypeApp extends StatelessWidget {
   }
 }
 
+// ── Root: Splash → Home → App Shell ─────────────────────────────────────────
+
 class RootNavigator extends StatefulWidget {
   const RootNavigator({super.key});
 
@@ -40,18 +43,28 @@ class RootNavigator extends StatefulWidget {
 }
 
 class _RootNavigatorState extends State<RootNavigator> {
-  bool _showSplash = true;
+  _Screen _screen = _Screen.splash;
 
   @override
   Widget build(BuildContext context) {
-    if (_showSplash) {
-      return SplashScreen(
-        onFinished: () => setState(() => _showSplash = false),
-      );
+    switch (_screen) {
+      case _Screen.splash:
+        return SplashScreen(
+          onFinished: () => setState(() => _screen = _Screen.home),
+        );
+      case _Screen.home:
+        return HomeScreen(
+          onGetStarted: () => setState(() => _screen = _Screen.app),
+        );
+      case _Screen.app:
+        return const AppShell();
     }
-    return const AppShell();
   }
 }
+
+enum _Screen { splash, home, app }
+
+// ── App shell with bottom navigation ────────────────────────────────────────
 
 class AppShell extends StatefulWidget {
   const AppShell({super.key});
@@ -68,12 +81,7 @@ class _AppShellState extends State<AppShell> {
 
   void _switchTab(int index) {
     setState(() => _currentIndex = index);
-
     if (index == 1) {
-      // If the RecordsScreen is already mounted, reload immediately.
-      // If not yet mounted (first visit), it calls loadFiles() in its own
-      // initState — but we also schedule a post-frame callback as a fallback
-      // so the key is guaranteed to be attached before we call through it.
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _recordsKey.currentState?.loadFiles();
       });
