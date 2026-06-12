@@ -3,6 +3,7 @@ import 'package:camera/camera.dart';
 import 'screens/splash_screen.dart';
 import 'screens/home_screen.dart';
 import 'screens/camera_screen.dart';
+import 'screens/news_screen.dart';
 import 'screens/records_screen.dart';
 
 List<CameraDescription> globalCameras = [];
@@ -64,7 +65,7 @@ class _RootNavigatorState extends State<RootNavigator> {
 
 enum _Screen { splash, home, app }
 
-// ── App shell with bottom navigation ────────────────────────────────────────
+// ── App shell ─────────────────────────────────────────────────────────────────
 
 class AppShell extends StatefulWidget {
   const AppShell({super.key});
@@ -74,14 +75,15 @@ class AppShell extends StatefulWidget {
 }
 
 class _AppShellState extends State<AppShell> {
-  int _currentIndex = 0;
+  // 0 = Scan, 1 = News, 2 = Records
+  int _currentIndex = 1; // default: News tab
 
   final GlobalKey<RecordsScreenState> _recordsKey =
   GlobalKey<RecordsScreenState>();
 
   void _switchTab(int index) {
     setState(() => _currentIndex = index);
-    if (index == 1) {
+    if (index == 2) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         _recordsKey.currentState?.loadFiles();
       });
@@ -94,7 +96,16 @@ class _AppShellState extends State<AppShell> {
       body: IndexedStack(
         index: _currentIndex,
         children: [
+          // Tab 0 — Scan
           const CameraScreen(),
+
+          // Tab 1 — News (shortcut buttons switch to scan/records tabs)
+          NewsScreen(
+            onScanTap: () => _switchTab(0),
+            onRecordsTap: () => _switchTab(2),
+          ),
+
+          // Tab 2 — Records
           RecordsScreen(key: _recordsKey),
         ],
       ),
@@ -110,6 +121,11 @@ class _AppShellState extends State<AppShell> {
             icon: Icon(Icons.camera_alt_outlined),
             activeIcon: Icon(Icons.camera_alt),
             label: 'Scan',
+          ),
+          BottomNavigationBarItem(
+            icon: Icon(Icons.newspaper_outlined),
+            activeIcon: Icon(Icons.newspaper),
+            label: 'News',
           ),
           BottomNavigationBarItem(
             icon: Icon(Icons.list_alt_outlined),
