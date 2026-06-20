@@ -4,6 +4,7 @@ import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'record_detail_screen.dart';
 import '../services/scan_store.dart';
+import '../theme/app_colors.dart';
 
 class RecordsScreen extends StatefulWidget {
   const RecordsScreen({super.key});
@@ -77,9 +78,11 @@ class RecordsScreenState extends State<RecordsScreen> {
       }).toList();
     }
     if (_sortBy == 'Name') {
-      list.sort((a, b) => _nameAscending
-          ? p.basename(a.path).compareTo(p.basename(b.path))
-          : p.basename(b.path).compareTo(p.basename(a.path)));
+      list.sort((a, b) {
+        final nameA = p.basenameWithoutExtension(a.path).toLowerCase();
+        final nameB = p.basenameWithoutExtension(b.path).toLowerCase();
+        return _nameAscending ? nameA.compareTo(nameB) : nameB.compareTo(nameA);
+      });
     } else if (_sortBy == 'Date') {
       list.sort((a, b) => _dateNewest
           ? b.lastModifiedSync().compareTo(a.lastModifiedSync())
@@ -512,14 +515,17 @@ class RecordsScreenState extends State<RecordsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Records - Mode',
-            style: TextStyle(fontWeight: FontWeight.bold)),
-        backgroundColor: Colors.white,
-        foregroundColor: Colors.black,
-        elevation: 1,
+        title: const Text('Records',
+            style: TextStyle(fontWeight: FontWeight.w600, color: AppColors.text)),
+        backgroundColor: AppColors.surface,
+        foregroundColor: AppColors.text,
+        elevation: 0,
         centerTitle: true,
+        shape: const Border(
+          bottom: BorderSide(color: AppColors.border, width: 0.6),
+        ),
       ),
-      backgroundColor: Colors.white,
+      backgroundColor: AppColors.bg,
       body: Column(
         children: [
           // Sort bar
@@ -612,15 +618,29 @@ class RecordsScreenState extends State<RecordsScreen> {
             const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             child: TextField(
               onChanged: _onSearchChanged,
+              style: const TextStyle(fontSize: 13, color: AppColors.text),
               decoration: InputDecoration(
-                hintText: '.jpeg',
+                hintText: 'Search by name',
+                hintStyle: TextStyle(color: AppColors.muted, fontSize: 13),
                 isDense: true,
+                filled: true,
+                fillColor: AppColors.surface,
                 contentPadding: const EdgeInsets.symmetric(
                     horizontal: 12, vertical: 10),
                 border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(8)),
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide(color: AppColors.border),
+                ),
+                enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide(color: AppColors.border),
+                ),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: const BorderSide(color: AppColors.accentLight, width: 1.5),
+                ),
                 suffixIcon:
-                const Icon(Icons.search, color: Colors.grey),
+                Icon(Icons.search, color: AppColors.muted),
               ),
             ),
           ),
@@ -636,12 +656,12 @@ class RecordsScreenState extends State<RecordsScreen> {
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
                   Icon(Icons.folder_open,
-                      size: 64, color: Colors.grey.shade400),
+                      size: 64, color: AppColors.muted),
                   const SizedBox(height: 12),
                   Text('No records yet',
                       style: TextStyle(
                           fontSize: 16,
-                          color: Colors.grey.shade500)),
+                          color: AppColors.muted)),
                 ],
               ),
             )
@@ -689,24 +709,27 @@ class RecordsScreenState extends State<RecordsScreen> {
           // Multi-select bottom bar
           if (_isSelecting)
             Container(
-              color: Colors.white,
               padding: const EdgeInsets.symmetric(
                   horizontal: 12, vertical: 12),
+              decoration: const BoxDecoration(
+                color: AppColors.surface,
+                border: Border(top: BorderSide(color: AppColors.border, width: 0.6)),
+              ),
               child: Row(
                 mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
                   TextButton.icon(
                     onPressed: _selectAll,
-                    icon: const Icon(Icons.select_all, color: Colors.black54),
+                    icon: const Icon(Icons.select_all, color: AppColors.muted),
                     label: const Text('Select All',
-                        style: TextStyle(color: Colors.black54)),
+                        style: TextStyle(color: AppColors.muted)),
                   ),
                   TextButton.icon(
                     onPressed: _unselectAll,
                     icon: const Icon(Icons.check_box_outline_blank,
-                        color: Colors.black54),
+                        color: AppColors.muted),
                     label: const Text('Unselect All',
-                        style: TextStyle(color: Colors.black54)),
+                        style: TextStyle(color: AppColors.muted)),
                   ),
                   ElevatedButton.icon(
                     onPressed: _confirmMultiDelete,
@@ -714,7 +737,7 @@ class RecordsScreenState extends State<RecordsScreen> {
                     label: const Text('Delete All',
                         style: TextStyle(color: Colors.white)),
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFE57373),
+                      backgroundColor: AppColors.bannedText,
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(8)),
                     ),
@@ -745,21 +768,24 @@ class _SortChip extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final activeColor = color ?? const Color(0xFFE57373);
+    final activeColor = color ?? AppColors.accentLight;
     return GestureDetector(
       onTap: onTap,
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
         decoration: BoxDecoration(
-          color: selected ? activeColor : Colors.grey.shade200,
-          borderRadius: BorderRadius.circular(6),
+          color: selected ? activeColor : AppColors.surface,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(
+            color: selected ? activeColor : AppColors.border,
+          ),
         ),
         child: Text(
           label,
           style: TextStyle(
             fontSize: 12,
             fontWeight: FontWeight.w600,
-            color: selected ? Colors.white : Colors.black87,
+            color: selected ? Colors.white : AppColors.muted,
           ),
         ),
       ),
@@ -796,152 +822,203 @@ class _RecordCard extends StatelessWidget {
       '${dt.year} / ${_pad(dt.month)} / ${_pad(dt.day)}';
   String _pad(int n) => n.toString().padLeft(2, '0');
 
+  // Maps the saved status string to icon + colors for the leading circle.
+  ({IconData icon, Color bg, Color fg, Color pillBg, Color pillText}) _statusVisuals(
+      String status) {
+    switch (status) {
+      case 'COMPLIANT':
+        return (
+        icon: Icons.check,
+        bg: AppColors.compliantBg,
+        fg: AppColors.compliantText,
+        pillBg: AppColors.compliantBg,
+        pillText: AppColors.compliantText,
+        );
+      case 'NON-COMPLIANT':
+        return (
+        icon: Icons.warning_amber_rounded,
+        bg: AppColors.nonCompliantBg,
+        fg: AppColors.nonCompliantText,
+        pillBg: AppColors.nonCompliantBg,
+        pillText: AppColors.nonCompliantText,
+        );
+      case 'WARNING / BANNED':
+        return (
+        icon: Icons.block,
+        bg: AppColors.bannedBg,
+        fg: AppColors.bannedText,
+        pillBg: AppColors.bannedBg,
+        pillText: AppColors.bannedText,
+        );
+      default:
+        return (
+        icon: Icons.image_outlined,
+        bg: AppColors.surfaceAlt,
+        fg: AppColors.muted,
+        pillBg: AppColors.surfaceAlt,
+        pillText: AppColors.muted,
+        );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
+    final data = ScanStore.load(file.path);
+    final status = data?['status'] as String? ?? '—';
+    final keyword = data?['matchedKeyword'] as String? ?? '—';
+    final visuals = _statusVisuals(status);
+
     return GestureDetector(
       onTap: onTap,
       onLongPress: onSelect,
       child: Container(
         margin: const EdgeInsets.only(bottom: 10),
         decoration: BoxDecoration(
-          color: Colors.grey.shade100,
-          borderRadius: BorderRadius.circular(12),
-          border: isSelected
-              ? Border.all(color: const Color(0xFF4CAF50), width: 2)
-              : null,
+          color: AppColors.surface,
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: isSelected ? AppColors.accentLight : AppColors.border,
+            width: isSelected ? 2 : 1,
+          ),
         ),
         child: Padding(
           padding: const EdgeInsets.all(12),
-          child: Column(
+          child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Date row
-              Text('Date : ${_formatDate(date)}',
-                  style: const TextStyle(
-                      fontSize: 12, color: Colors.black54)),
-              const SizedBox(height: 6),
-
-              // Name row with delete + checkbox
-              Row(
-                children: [
-                  const Text('Name : ',
-                      style: TextStyle(
-                          fontSize: 13, fontWeight: FontWeight.w600)),
-                  Expanded(
-                    child: GestureDetector(
-                      onTap: onRename,
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                            horizontal: 8, vertical: 4),
-                        decoration: BoxDecoration(
-                          color: Colors.white,
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: Colors.grey.shade300),
-                        ),
-                        child: Row(
-                          children: [
-                            Expanded(
-                              child: Text(name,
-                                  style: const TextStyle(fontSize: 12),
-                                  overflow: TextOverflow.ellipsis),
-                            ),
-                            Icon(Icons.edit, size: 12, color: Colors.grey.shade400),
-                          ],
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  // Red X delete
-                  GestureDetector(
-                    onTap: onDelete,
-                    child: Container(
-                      padding: const EdgeInsets.all(4),
-                      decoration: BoxDecoration(
-                        color: const Color(0xFFE57373),
-                        borderRadius: BorderRadius.circular(4),
-                      ),
-                      child: const Icon(Icons.close,
-                          color: Colors.white, size: 16),
-                    ),
-                  ),
-                  const SizedBox(width: 6),
-                  // Checkbox for multi-select
-                  GestureDetector(
-                    onTap: onSelect,
-                    child: Container(
-                      width: 22,
-                      height: 22,
-                      decoration: BoxDecoration(
-                        shape: BoxShape.circle,
-                        border: Border.all(
-                            color: Colors.grey.shade400, width: 1.5),
-                        color: isSelected
-                            ? const Color(0xFF4CAF50)
-                            : Colors.white,
-                      ),
-                      child: isSelected
-                          ? const Icon(Icons.check,
-                          size: 14, color: Colors.white)
-                          : null,
-                    ),
-                  ),
-                ],
+              // Status icon circle — leading visual indicator
+              Container(
+                width: 44,
+                height: 44,
+                margin: const EdgeInsets.only(top: 2),
+                decoration: BoxDecoration(
+                  color: visuals.bg,
+                  shape: BoxShape.circle,
+                ),
+                child: Icon(visuals.icon, color: visuals.fg, size: 21),
               ),
-              const SizedBox(height: 8),
+              const SizedBox(width: 12),
 
-              // Compliance — reads from saved JSON
-              Builder(builder: (_) {
-                final data = ScanStore.load(file.path);
-                final status = data?['status'] as String? ?? '—';
-                final keyword = data?['matchedKeyword'] as String? ?? '—';
-
-                Color statusColor = Colors.grey;
-                if (status == 'COMPLIANT') statusColor = const Color(0xFF4CAF50);
-                if (status == 'NON-COMPLIANT') statusColor = const Color(0xFFFF9800);
-                if (status == 'WARNING / BANNED') statusColor = const Color(0xFFF44336);
-
-                return Container(
-                  width: double.infinity,
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(8),
-                    border: Border.all(color: Colors.grey.shade200),
-                  ),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Row(
-                        children: [
-                          const Text('Compliance Status : ',
-                              style: TextStyle(fontSize: 12)),
-                          Container(
-                            padding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 2),
-                            decoration: BoxDecoration(
-                              color: statusColor,
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text(
-                              status,
-                              style: const TextStyle(
-                                  fontSize: 11,
-                                  color: Colors.white,
-                                  fontWeight: FontWeight.bold),
+              // Main content column
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Name row with rename + delete + checkbox
+                    Row(
+                      children: [
+                        Expanded(
+                          child: GestureDetector(
+                            onTap: onRename,
+                            child: Row(
+                              children: [
+                                Expanded(
+                                  child: Text(
+                                    name,
+                                    style: const TextStyle(
+                                      fontSize: 14,
+                                      fontWeight: FontWeight.w600,
+                                      color: AppColors.text,
+                                    ),
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ),
+                                const SizedBox(width: 4),
+                                Icon(Icons.edit,
+                                    size: 13, color: AppColors.muted),
+                              ],
                             ),
                           ),
-                        ],
+                        ),
+                        const SizedBox(width: 6),
+                        // Delete button
+                        GestureDetector(
+                          onTap: onDelete,
+                          child: Container(
+                            padding: const EdgeInsets.all(4),
+                            decoration: BoxDecoration(
+                              color: AppColors.bannedBg,
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Icon(Icons.close,
+                                color: AppColors.bannedText, size: 14),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        // Multi-select checkbox
+                        GestureDetector(
+                          onTap: onSelect,
+                          child: Container(
+                            width: 20,
+                            height: 20,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                  color: AppColors.border, width: 1.5),
+                              color: isSelected
+                                  ? AppColors.accentLight
+                                  : AppColors.surface,
+                            ),
+                            child: isSelected
+                                ? const Icon(Icons.check,
+                                size: 12, color: Colors.white)
+                                : null,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 3),
+
+                    // Date
+                    Text(
+                      _formatDate(date),
+                      style: const TextStyle(
+                          fontSize: 11.5, color: AppColors.muted),
+                    ),
+                    const SizedBox(height: 8),
+
+                    // Compliance pill + detection basis
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                              horizontal: 8, vertical: 3),
+                          decoration: BoxDecoration(
+                            color: visuals.pillBg,
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Text(
+                            status,
+                            style: TextStyle(
+                              fontSize: 10.5,
+                              color: visuals.pillText,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (keyword != '—') ...[
+                      const SizedBox(height: 5),
+                      Text(
+                        'Detection basis: $keyword',
+                        style: const TextStyle(
+                            fontSize: 11.5, color: AppColors.muted),
+                        overflow: TextOverflow.ellipsis,
                       ),
-                      const SizedBox(height: 4),
-                      Text('Detection Basis    : $keyword',
-                          style: const TextStyle(
-                              fontSize: 12, color: Colors.black54),
-                          overflow: TextOverflow.ellipsis),
                     ],
-                  ),
-                );
-              }),
+                  ],
+                ),
+              ),
+
+              // Trailing chevron to signal tappability
+              const SizedBox(width: 4),
+              Padding(
+                padding: const EdgeInsets.only(top: 12),
+                child: Icon(Icons.chevron_right,
+                    size: 18, color: AppColors.muted),
+              ),
             ],
           ),
         ),
