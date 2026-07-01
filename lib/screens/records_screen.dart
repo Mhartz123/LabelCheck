@@ -5,6 +5,9 @@ import 'package:path/path.dart' as p;
 import 'record_detail_screen.dart';
 import '../services/scan_store.dart';
 import '../theme/app_colors.dart';
+import 'package:pdf/widgets.dart' as pw;
+import 'package:printing/printing.dart';
+import '../screens/report_builder.dart';
 
 class RecordsScreen extends StatefulWidget {
   const RecordsScreen({super.key});
@@ -78,11 +81,9 @@ class RecordsScreenState extends State<RecordsScreen> {
       }).toList();
     }
     if (_sortBy == 'Name') {
-      list.sort((a, b) {
-        final nameA = p.basenameWithoutExtension(a.path).toLowerCase();
-        final nameB = p.basenameWithoutExtension(b.path).toLowerCase();
-        return _nameAscending ? nameA.compareTo(nameB) : nameB.compareTo(nameA);
-      });
+      list.sort((a, b) => _nameAscending
+          ? p.basename(a.path).compareTo(p.basename(b.path))
+          : p.basename(b.path).compareTo(p.basename(a.path)));
     } else if (_sortBy == 'Date') {
       list.sort((a, b) => _dateNewest
           ? b.lastModifiedSync().compareTo(a.lastModifiedSync())
@@ -511,6 +512,39 @@ class RecordsScreenState extends State<RecordsScreen> {
     );
   }
 
+  // ── Generate PDF report ───────────────────────────────────────────────────
+  Future<void> _generateReport() async {
+    // Show loading indicator
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const Center(
+        child: CircularProgressIndicator(color: AppColors.accentLight),
+      ),
+    );
+
+    try {
+      final pw.Document pdf = await ReportBuilder.build();
+      if (!mounted) return;
+      Navigator.of(context).pop(); // dismiss loading
+
+      // Open the built-in PDF preview (includes share + print buttons)
+      await Printing.layoutPdf(
+        onLayout: (_) async => pdf.save(),
+        name: 'VerifyDA_Compliance_Report_${DateTime.now().millisecondsSinceEpoch}.pdf',
+      );
+    } catch (e) {
+      if (!mounted) return;
+      Navigator.of(context).pop(); // dismiss loading
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to generate report: $e'),
+          backgroundColor: AppColors.bannedText,
+        ),
+      );
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -524,6 +558,13 @@ class RecordsScreenState extends State<RecordsScreen> {
         shape: const Border(
           bottom: BorderSide(color: AppColors.border, width: 0.6),
         ),
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.picture_as_pdf_outlined),
+            tooltip: 'Generate Report',
+            onPressed: _generateReport,
+          ),
+        ],
       ),
       backgroundColor: AppColors.bg,
       body: Column(
@@ -709,10 +750,10 @@ class RecordsScreenState extends State<RecordsScreen> {
           // Multi-select bottom bar
           if (_isSelecting)
             Container(
+              color: AppColors.surface,
               padding: const EdgeInsets.symmetric(
                   horizontal: 12, vertical: 12),
               decoration: const BoxDecoration(
-                color: AppColors.surface,
                 border: Border(top: BorderSide(color: AppColors.border, width: 0.6)),
               ),
               child: Row(
