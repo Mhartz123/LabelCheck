@@ -4,25 +4,27 @@ import 'package:http/http.dart' as http;
 import 'fda_checker.dart';
 
 /// Submits flagged (NON-COMPLIANT or BANNED) scan results to the
-/// LabelCheck central dashboard.
+/// LabelCheck central dashboard hosted on Vercel + Supabase.
 ///
-/// Usage:
-///   await ReportService.submit(
-///     photoPath: destPath,
-///     result: scanResult,
-///     productName: fileName,
-///   );
+/// Setup:
+///   1. Deploy the server folder to Vercel (see README.md in server folder)
+///   2. Replace _endpoint below with your actual Vercel URL
+///   3. Make sure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are set
+///      in Vercel Project Settings → Environment Variables
 class ReportService {
   // ── CONFIGURE THIS ─────────────────────────────────────────────────────────
-  // Replace with the URL where your dashboard is hosted.
-  // If running locally for testing, use your machine's LAN IP, e.g.:
-  //   http://192.168.1.100:8080/api/report
-  static const String _endpoint = 'http://192.168.1.9:8080/api/report';
+  // Replace with your actual Vercel deployment URL, e.g.:
+  //   https://your-project-name.vercel.app/api/report
+  //
+  // DO NOT use http://localhost or a LAN IP here — those only work
+  // when the server is running on the same network.
+  static const String _endpoint =
+      'https://label-check-website.vercel.app/';
 
-  // Set to false to disable image uploads (saves bandwidth).
+  // Set to false to disable image uploads (saves bandwidth / Supabase storage).
   static const bool _includeImage = true;
 
-  // Max image size in bytes to include in the payload (default 200 KB).
+  // Max image size in bytes included in the payload (default 200 KB).
   static const int _maxImageBytes = 200 * 1024;
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -36,6 +38,11 @@ class ReportService {
     // Only send flagged results
     if (result.status == ComplianceStatus.compliant) return false;
 
+    // Skip if endpoint hasn't been configured yet
+    if (_endpoint.contains('YOUR_PROJECT_NAME')) {
+      return false;
+    }
+
     try {
       final payload = await _buildPayload(
         photoPath: photoPath,
@@ -45,10 +52,10 @@ class ReportService {
 
       final response = await http
           .post(
-            Uri.parse(_endpoint),
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode(payload),
-          )
+        Uri.parse(_endpoint),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(payload),
+      )
           .timeout(const Duration(seconds: 15));
 
       return response.statusCode == 200;
