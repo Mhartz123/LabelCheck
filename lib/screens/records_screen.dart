@@ -750,10 +750,10 @@ class RecordsScreenState extends State<RecordsScreen> {
           // Multi-select bottom bar
           if (_isSelecting)
             Container(
-              color: AppColors.surface,
               padding: const EdgeInsets.symmetric(
                   horizontal: 12, vertical: 12),
               decoration: const BoxDecoration(
+                color: AppColors.surface,
                 border: Border(top: BorderSide(color: AppColors.border, width: 0.6)),
               ),
               child: Row(
