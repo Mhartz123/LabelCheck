@@ -1,14 +1,52 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:camera/camera.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:path/path.dart' as p;
 import '../main.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
-import '../services/fda_checker.dart';
+import '../models/scan_record.dart';
+import '../services/compliance_engine.dart';
 import '../services/scan_store.dart';
 import '../services/report_service.dart';
 import 'result_screen.dart';
+
+/// Static definition of one capture step in the camera flow.
+class SlotSpec {
+  final PhotoSlot slot;
+  final String title;
+  final String helper;
+  final bool alwaysOptional;
+
+  const SlotSpec({
+    required this.slot,
+    required this.title,
+    required this.helper,
+    this.alwaysOptional = false,
+  });
+}
+
+const List<SlotSpec> _allSlots = [
+  SlotSpec(
+    slot: PhotoSlot.front,
+    title: 'Front label',
+    helper: 'Frame the product name & main label inside the guide',
+  ),
+  SlotSpec(
+    slot: PhotoSlot.back,
+    title: 'Back label',
+    helper: 'Frame the ingredients & FDA Reg. No. side inside the guide',
+  ),
+  SlotSpec(
+    slot: PhotoSlot.side1,
+    title: 'Side label',
+    helper: 'Frame any additional label details inside the guide',
+  ),
+  SlotSpec(
+    slot: PhotoSlot.side2,
+    title: 'Side label (extra)',
+    helper: 'Optional — capture another angle if useful',
+    alwaysOptional: true,
+  ),
+];
 
 class CameraScreen extends StatefulWidget {
   const CameraScreen({super.key});
@@ -22,6 +60,7 @@ class _CameraScreenState extends State<CameraScreen>
   CameraController? _controller;
   bool _isReady = false;
   bool _isTaking = false;
+  bool _isProcessing = false;
   bool _isFlashOn = false;
   int _cameraIndex = 0;
 
@@ -33,6 +72,21 @@ class _CameraScreenState extends State<CameraScreen>
 
   // Focus
   Offset? _focusPoint;
+
+  // ── Multi-shot capture state ────────────────────────────────────────────
+  int _currentSlotIndex = 0;
+  bool _skipBackConfirmed = false;
+  final Map<PhotoSlot, String> _capturedPaths = {};
+
+  List<SlotSpec> get _activeSlots {
+    if (_skipBackConfirmed) {
+      return _allSlots.where((s) => s.slot != PhotoSlot.back).toList();
+    }
+    return _allSlots;
+  }
+
+  SlotSpec get _currentSlot => _activeSlots[_currentSlotIndex];
+  int get _totalSlots => _activeSlots.length;
 
   @override
   void initState() {
@@ -78,6 +132,13 @@ class _CameraScreenState extends State<CameraScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _controller?.dispose();
+    // Best-effort cleanup of any temp photos abandoned mid-flow.
+    for (final path in _capturedPaths.values) {
+      try {
+        final f = File(path);
+        if (f.existsSync()) f.deleteSync();
+      } catch (_) {}
+    }
     super.dispose();
   }
 
@@ -130,41 +191,33 @@ class _CameraScreenState extends State<CameraScreen>
     });
   }
 
+  // ── Skip controls ───────────────────────────────────────────────────────
+  void _onSkipBackTap() {
+    // Do NOT touch _currentSlotIndex — splicing Back out of _activeSlots
+    // naturally shifts Side1 into the current index.
+    setState(() => _skipBackConfirmed = true);
+  }
+
+  void _onSkipCurrentSlot() {
+    _advanceOrFinish();
+  }
+
   // ── Take photo ─────────────────────────────────────────────────────────────
   Future<void> _takePhoto() async {
     if (_controller == null || !_controller!.value.isInitialized) return;
-    if (_isTaking) return;
+    if (_isTaking || _isProcessing) return;
     setState(() => _isTaking = true);
 
     try {
       final XFile photo = await _controller!.takePicture();
-
-      // Run ML Kit OCR
-      final inputImage = InputImage.fromFilePath(photo.path);
-      final textRecognizer = TextRecognizer();
-      final RecognizedText recognizedText =
-      await textRecognizer.processImage(inputImage);
-      await textRecognizer.close();
-
-      final String extractedText = recognizedText.text;
-      final ScanResult result = FdaChecker.classify(extractedText);
-
-      // Show result screen first, then ask to save
-      if (mounted) {
-        await Navigator.of(context).push(
-          MaterialPageRoute(
-            builder: (_) => ResultScreen(result: result),
-          ),
-        );
-        // After user returns from result screen, show save sheet
-        if (mounted) _showSaveSheet(photo.path, result);
-      }
+      _capturedPaths[_currentSlot.slot] = photo.path;
+      await _advanceOrFinish();
     } catch (e) {
-      debugPrint('Scan error: $e');
+      debugPrint('Capture error: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Scan failed. Try again.'),
+            content: Text('Capture failed. Try again.'),
             backgroundColor: Colors.red,
           ),
         );
@@ -174,27 +227,83 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
-  // ── Resolve photos directory ───────────────────────────────────────────────
-  Future<Directory> _getPhotoDir() async {
-    final Directory appDir = await getApplicationDocumentsDirectory();
-    final Directory photoDir =
-    Directory(p.join(appDir.path, 'UI_Prototype_Photos'));
-    if (!await photoDir.exists()) await photoDir.create(recursive: true);
-    return photoDir;
+  Future<void> _advanceOrFinish() async {
+    if (_currentSlotIndex < _totalSlots - 1) {
+      setState(() => _currentSlotIndex++);
+    } else {
+      await _runOcrAndClassify();
+    }
+  }
+
+  // ── OCR across all captured photos, then classify ──────────────────────
+  Future<void> _runOcrAndClassify() async {
+    setState(() => _isProcessing = true);
+
+    const orderedSlots = [
+      PhotoSlot.front,
+      PhotoSlot.back,
+      PhotoSlot.side1,
+      PhotoSlot.side2,
+    ];
+    final orderedPaths = [
+      for (final s in orderedSlots)
+        if (_capturedPaths[s] != null) _capturedPaths[s]!,
+    ];
+
+    final textRecognizer = TextRecognizer();
+    final buffer = StringBuffer();
+    try {
+      for (final path in orderedPaths) {
+        final inputImage = InputImage.fromFilePath(path);
+        final recognized = await textRecognizer.processImage(inputImage);
+        if (buffer.isNotEmpty) buffer.write('\n\n');
+        buffer.write(recognized.text);
+      }
+    } catch (e) {
+      debugPrint('OCR error: $e');
+    } finally {
+      await textRecognizer.close();
+    }
+
+    final combinedText = buffer.toString();
+    final record = await ComplianceEngine.analyze(
+      combinedText: combinedText,
+      photoPaths: orderedPaths,
+    );
+
+    if (mounted) setState(() => _isProcessing = false);
+
+    if (mounted) {
+      await Navigator.of(context).push(
+        MaterialPageRoute(
+          builder: (_) => ResultScreen(record: record),
+        ),
+      );
+      if (mounted) _showSaveSheet(record);
+    }
   }
 
   // ── Check duplicate name ───────────────────────────────────────────────────
-  Future<bool> _nameExists(String raw) async {
-    if (raw.trim().isEmpty) return false;
-    final dir = await _getPhotoDir();
-    String fileName = raw.trim();
-    if (!fileName.endsWith('.jpeg')) fileName = '$fileName.jpeg';
-    fileName = fileName.replaceAll(' ', '_');
-    return File(p.join(dir.path, fileName)).existsSync();
+  Future<bool> _nameExists(String raw) => ScanStore.recordExists(raw);
+
+  void _resetCaptureFlow() {
+    setState(() {
+      _capturedPaths.clear();
+      _currentSlotIndex = 0;
+      _skipBackConfirmed = false;
+    });
+  }
+
+  void _discardCapturedPhotos() {
+    for (final path in _capturedPaths.values) {
+      final f = File(path);
+      if (f.existsSync()) f.deleteSync();
+    }
+    _resetCaptureFlow();
   }
 
   // ── Save Record bottom sheet ───────────────────────────────────────────────
-  void _showSaveSheet(String tempPath, ScanResult result) {
+  void _showSaveSheet(ScanRecord record) {
     final TextEditingController nameController = TextEditingController();
 
     showModalBottomSheet(
@@ -251,7 +360,7 @@ class _CameraScreenState extends State<CameraScreen>
                     autofocus: true,
                     onChanged: onChanged,
                     decoration: InputDecoration(
-                      hintText: '.jpeg',
+                      hintText: 'Record name',
                       isDense: true,
                       contentPadding: const EdgeInsets.symmetric(
                           horizontal: 12, vertical: 10),
@@ -291,7 +400,12 @@ class _CameraScreenState extends State<CameraScreen>
                   ),
                   const SizedBox(height: 10),
                   const Text(
-                    '*Please input a name for the picture you just took.',
+                    '*Please input a name for the record you just scanned.',
+                    style: TextStyle(fontSize: 12, color: Colors.black54),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    '*Note: once saved, this name cannot be changed.',
                     style: TextStyle(fontSize: 12, color: Colors.black54),
                   ),
                   const SizedBox(height: 6),
@@ -299,7 +413,7 @@ class _CameraScreenState extends State<CameraScreen>
                       style:
                       TextStyle(fontSize: 12, color: Colors.black54)),
                   const Text(
-                    'Loaf_of_bread.jpeg',
+                    'Loaf_of_bread',
                     style: TextStyle(
                         fontSize: 12,
                         color: Colors.black54,
@@ -312,7 +426,7 @@ class _CameraScreenState extends State<CameraScreen>
                         child: ElevatedButton(
                           onPressed: () {
                             Navigator.of(context).pop();
-                            File(tempPath).deleteSync();
+                            _discardCapturedPhotos();
                           },
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFFE57373),
@@ -336,7 +450,7 @@ class _CameraScreenState extends State<CameraScreen>
                               : () async {
                             final raw = nameController.text.trim();
                             Navigator.of(context).pop();
-                            await _savePhoto(tempPath, raw, result);
+                            await _saveRecord(raw, record);
                           },
                           style: ElevatedButton.styleFrom(
                             backgroundColor: const Color(0xFF4CAF50),
@@ -364,45 +478,37 @@ class _CameraScreenState extends State<CameraScreen>
     );
   }
 
-  // ── Save photo ─────────────────────────────────────────────────────────────
-  Future<void> _savePhoto(String tempPath, String rawName, ScanResult result) async {
+  // ── Save record ─────────────────────────────────────────────────────────────
+  Future<void> _saveRecord(String rawName, ScanRecord record) async {
     try {
-      final dir = await _getPhotoDir();
-      String fileName =
-      rawName.endsWith('.jpeg') ? rawName : '$rawName.jpeg';
-      fileName = fileName.replaceAll(' ', '_');
-      final String destPath = p.join(dir.path, fileName);
-      await File(tempPath).copy(destPath);
-
-      // Save scan result alongside the photo
-      await ScanStore.save(
-        photoPath: destPath,
-        status: result.statusLabel,
-        matchedKeyword: result.matchedKeyword,
-        extractedText: result.extractedText,
+      final dir = await ScanStore.save(
+        rawName: rawName,
+        capturedPhotoPaths: Map.of(_capturedPaths),
+        record: record,
       );
 
       // Submit flagged results to central dashboard (fire-and-forget)
       ReportService.submit(
-        photoPath: destPath,
-        result: result,
-        productName: p.basenameWithoutExtension(destPath),
+        recordDir: dir,
+        record: record,
+        productName: rawName,
       );
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('Photo "$fileName" saved!'),
+            content: Text('Record "$rawName" saved!'),
             backgroundColor: const Color(0xFF4CAF50),
           ),
         );
       }
+      _resetCaptureFlow();
     } catch (e) {
-      debugPrint('Save photo error: $e');
+      debugPrint('Save record error: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Failed to save photo.'),
+            content: Text('Failed to save record.'),
             backgroundColor: Colors.red,
           ),
         );
@@ -430,6 +536,8 @@ class _CameraScreenState extends State<CameraScreen>
       );
     }
 
+    final slot = _currentSlot;
+
     return Scaffold(
       backgroundColor: Colors.black,
       body: Stack(
@@ -444,25 +552,22 @@ class _CameraScreenState extends State<CameraScreen>
             child: CameraPreview(_controller!),
           ),
 
-          // Focus circle indicator — always in tree, animates on each tap
-          if (_focusPoint != null)
-            Positioned(
-              left: _focusPoint!.dx - 35,
-              top: _focusPoint!.dy - 35,
-              child: _FocusCircle(
-                key: ValueKey(_focusPoint), // new key = fresh animation on every tap
-                visible: true,
-              ),
-            ),
-
-          // Zoom level badge
-          if (_currentZoom > _minZoom + 0.05)
-            Positioned(
-              top: 60,
-              left: 0,
-              right: 0,
-              child: Center(
-                child: Container(
+          // Framing guide
+          IgnorePointer(
+            child: Center(
+              child: Container(
+                width: 240,
+                height: 240,
+                alignment: Alignment.center,
+                decoration: BoxDecoration(
+                  border: Border.all(
+                    color: Colors.white.withValues(alpha: 0.85),
+                    width: 1.5,
+                  ),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: _currentZoom > _minZoom + 0.05
+                    ? Container(
                   padding: const EdgeInsets.symmetric(
                       horizontal: 10, vertical: 4),
                   decoration: BoxDecoration(
@@ -474,9 +579,134 @@ class _CameraScreenState extends State<CameraScreen>
                     style: const TextStyle(
                         color: Colors.white, fontSize: 14),
                   ),
+                )
+                    : null,
+              ),
+            ),
+          ),
+
+          // Focus circle indicator — always in tree, animates on each tap
+          if (_focusPoint != null)
+            Positioned(
+              left: _focusPoint!.dx - 35,
+              top: _focusPoint!.dy - 35,
+              child: _FocusCircle(
+                key: ValueKey(_focusPoint), // new key = fresh animation on every tap
+                visible: true,
+              ),
+            ),
+
+          // Top step header
+          Positioned(
+            top: 56,
+            left: 20,
+            right: 20,
+            child: Column(
+              children: [
+                Container(
+                  padding:
+                  const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF4CAF50),
+                    borderRadius: BorderRadius.circular(20),
+                  ),
+                  child: Text(
+                    'PHOTO ${_currentSlotIndex + 1} OF $_totalSlots',
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: 0.6,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  slot.title,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 20,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  slot.helper,
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white.withValues(alpha: 0.8),
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 10),
+                if (slot.slot == PhotoSlot.back && !_skipBackConfirmed)
+                  GestureDetector(
+                    onTap: _onSkipBackTap,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 12, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withValues(alpha: 0.55),
+                        borderRadius: BorderRadius.circular(20),
+                        border: Border.all(
+                            color: Colors.white.withValues(alpha: 0.4)),
+                      ),
+                      child: const Text(
+                        'Front & back identical? · Skip to 3 photos',
+                        style: TextStyle(color: Colors.white, fontSize: 11.5),
+                      ),
+                    ),
+                  ),
+                if (slot.alwaysOptional)
+                  TextButton(
+                    onPressed: _onSkipCurrentSlot,
+                    child: const Text(
+                      'Skip this photo (optional)',
+                      style: TextStyle(color: Colors.white, fontSize: 12.5),
+                    ),
+                  ),
+              ],
+            ),
+          ),
+
+          if (_isProcessing)
+            Container(
+              color: Colors.black.withValues(alpha: 0.6),
+              child: const Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    CircularProgressIndicator(color: Colors.white),
+                    SizedBox(height: 16),
+                    Text('Analyzing label...',
+                        style: TextStyle(color: Colors.white)),
+                  ],
                 ),
               ),
             ),
+
+          // Thumbnail strip
+          Positioned(
+            bottom: 120,
+            left: 0,
+            right: 0,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: _allSlots.map((s) {
+                final isSkippedBack =
+                    s.slot == PhotoSlot.back && _skipBackConfirmed;
+                final isCaptured = _capturedPaths.containsKey(s.slot);
+                final isCurrent = !isSkippedBack && s.slot == slot.slot;
+                return _SlotThumbnail(
+                  spec: s,
+                  isCurrent: isCurrent,
+                  isCaptured: isCaptured,
+                  isSkipped: isSkippedBack,
+                  imagePath: _capturedPaths[s.slot],
+                );
+              }).toList(),
+            ),
+          ),
 
           // Bottom controls — placed ABOVE gesture layer so buttons still work
           Positioned(
@@ -491,14 +721,14 @@ class _CameraScreenState extends State<CameraScreen>
                   icon: Icons.flip_camera_android,
                   iconColor: Colors.white,
                   size: 52,
-                  onTap: _switchCamera,
+                  onTap: _isProcessing ? null : _switchCamera,
                 ),
                 _CircleButton(
                   color: Colors.white,
                   icon: _isTaking ? null : Icons.circle,
                   iconColor: Colors.white,
                   size: 72,
-                  onTap: _isTaking ? null : _takePhoto,
+                  onTap: (_isTaking || _isProcessing) ? null : _takePhoto,
                   isShutter: true,
                   isTaking: _isTaking,
                 ),
@@ -507,10 +737,102 @@ class _CameraScreenState extends State<CameraScreen>
                   icon: _isFlashOn ? Icons.flash_on : Icons.flash_off,
                   iconColor: Colors.white,
                   size: 52,
-                  onTap: _toggleFlash,
+                  onTap: _isProcessing ? null : _toggleFlash,
                 ),
               ],
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ── Slot thumbnail ─────────────────────────────────────────────────────────────
+
+class _SlotThumbnail extends StatelessWidget {
+  final SlotSpec spec;
+  final bool isCurrent;
+  final bool isCaptured;
+  final bool isSkipped;
+  final String? imagePath;
+
+  const _SlotThumbnail({
+    required this.spec,
+    required this.isCurrent,
+    required this.isCaptured,
+    required this.isSkipped,
+    required this.imagePath,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Opacity(
+      opacity: isSkipped ? 0.35 : 1.0,
+      child: Column(
+        children: [
+          Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Container(
+                width: 52,
+                height: 52,
+                decoration: BoxDecoration(
+                  color: Colors.black.withValues(alpha: 0.5),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: isCurrent
+                        ? const Color(0xFF4CAF50)
+                        : Colors.white.withValues(alpha: 0.4),
+                    width: isCurrent ? 2.5 : 1,
+                  ),
+                  image: imagePath != null
+                      ? DecorationImage(
+                    image: FileImage(File(imagePath!)),
+                    fit: BoxFit.cover,
+                  )
+                      : null,
+                ),
+                child: imagePath == null
+                    ? Icon(Icons.image_outlined,
+                    color: Colors.white.withValues(alpha: 0.5), size: 20)
+                    : null,
+              ),
+              if (isCaptured)
+                Positioned(
+                  right: -2,
+                  top: -2,
+                  child: Container(
+                    padding: const EdgeInsets.all(2),
+                    decoration: const BoxDecoration(
+                      color: Color(0xFF4CAF50),
+                      shape: BoxShape.circle,
+                    ),
+                    child: const Icon(Icons.check,
+                        size: 10, color: Colors.white),
+                  ),
+                ),
+              if (spec.alwaysOptional)
+                Positioned(
+                  left: -6,
+                  top: -6,
+                  child: Container(
+                    padding:
+                    const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: Colors.black87,
+                      borderRadius: BorderRadius.circular(6),
+                    ),
+                    child: const Text('opt',
+                        style: TextStyle(color: Colors.white, fontSize: 8)),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 3),
+          Text(
+            spec.title.split(' ').first,
+            style: const TextStyle(color: Colors.white, fontSize: 10),
           ),
         ],
       ),

@@ -1,6 +1,5 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:path/path.dart' as p;
 import 'record_detail_screen.dart';
 import '../services/scan_store.dart';
@@ -17,8 +16,8 @@ class RecordsScreen extends StatefulWidget {
 }
 
 class RecordsScreenState extends State<RecordsScreen> {
-  List<File> _allFiles = [];
-  List<File> _filtered = [];
+  List<Directory> _allDirs = [];
+  List<Directory> _filtered = [];
   String _sortBy = 'Name';
   bool _nameAscending = true;
   bool _dateNewest = true;
@@ -42,22 +41,7 @@ class RecordsScreenState extends State<RecordsScreen> {
   Future<void> loadFiles() async {
     setState(() => _loading = true);
     try {
-      final Directory appDir = await getApplicationDocumentsDirectory();
-      final Directory photoDir = Directory(p.join(appDir.path, 'UI_Prototype_Photos'));
-      if (!await photoDir.exists()) {
-        setState(() {
-          _allFiles = [];
-          _filtered = [];
-          _loading = false;
-        });
-        return;
-      }
-      final files = photoDir
-          .listSync()
-          .whereType<File>()
-          .where((f) => f.path.endsWith('.jpeg') || f.path.endsWith('.jpg'))
-          .toList();
-      _allFiles = files;
+      _allDirs = await ScanStore.listRecordDirs();
       _applySort();
     } catch (e) {
       debugPrint('Load files error: $e');
@@ -67,17 +51,18 @@ class RecordsScreenState extends State<RecordsScreen> {
   }
 
   void _applySort() {
-    List<File> list = List.from(_allFiles);
+    List<Directory> list = List.from(_allDirs);
     if (_searchQuery.isNotEmpty) {
       list = list
-          .where((f) => p.basename(f.path).toLowerCase().contains(_searchQuery.toLowerCase()))
+          .where((d) => p.basename(d.path)
+          .toLowerCase()
+          .contains(_searchQuery.toLowerCase()))
           .toList();
     }
     if (_complianceFilter.isNotEmpty) {
-      list = list.where((f) {
-        final data = ScanStore.load(f.path);
-        final status = data?['status'] as String? ?? '';
-        return status == _complianceFilter;
+      list = list.where((d) {
+        final record = ScanStore.load(d);
+        return record?.statusLabel == _complianceFilter;
       }).toList();
     }
     if (_sortBy == 'Name') {
@@ -85,20 +70,17 @@ class RecordsScreenState extends State<RecordsScreen> {
           ? p.basename(a.path).compareTo(p.basename(b.path))
           : p.basename(b.path).compareTo(p.basename(a.path)));
     } else if (_sortBy == 'Date') {
-      list.sort((a, b) => _dateNewest
-          ? b.lastModifiedSync().compareTo(a.lastModifiedSync())
-          : a.lastModifiedSync().compareTo(b.lastModifiedSync()));
+      list.sort((a, b) {
+        final aDate = ScanStore.load(a)?.scannedAt ?? a.statSync().modified;
+        final bDate = ScanStore.load(b)?.scannedAt ?? b.statSync().modified;
+        return _dateNewest ? bDate.compareTo(aDate) : aDate.compareTo(bDate);
+      });
     }
     setState(() => _filtered = list);
   }
 
   void _onSearchChanged(String val) {
     _searchQuery = val;
-    _applySort();
-  }
-
-  void _onSortChanged(String val) {
-    _sortBy = val;
     _applySort();
   }
 
@@ -122,221 +104,13 @@ class RecordsScreenState extends State<RecordsScreen> {
 
   void _selectAll() {
     setState(() {
-      _selected.addAll(_filtered.map((f) => f.path));
+      _selected.addAll(_filtered.map((d) => d.path));
       _isSelecting = _selected.isNotEmpty;
     });
   }
 
-  // ── Rename ───────────────────────────────────────────────────────────────
-  Future<bool> _nameExists(String fileName, String excludePath) async {
-    final dir = File(excludePath).parent;
-    final candidate = File(p.join(dir.path, fileName));
-    return candidate.existsSync() && candidate.path != excludePath;
-  }
-
-  void _confirmRename(File file) {
-    final currentName = p.basenameWithoutExtension(file.path);
-    final TextEditingController nameController =
-    TextEditingController(text: currentName);
-
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      isDismissible: false,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) {
-        bool isTaken = false;
-        bool isEmpty = false;
-
-        return StatefulBuilder(
-          builder: (context, setSheetState) {
-            void onChanged(String val) async {
-              final newFileName = val.trim().endsWith('.jpeg')
-                  ? val.trim()
-                  : '${val.trim()}.jpeg';
-              final taken = val.trim().isEmpty
-                  ? false
-                  : await _nameExists(newFileName, file.path);
-              setSheetState(() {
-                isTaken = taken;
-                isEmpty = val.trim().isEmpty;
-              });
-            }
-
-            return Padding(
-              padding: EdgeInsets.only(
-                left: 20,
-                right: 20,
-                top: 20,
-                bottom: MediaQuery.of(context).viewInsets.bottom + 20,
-              ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  // Title bar
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.symmetric(
-                        horizontal: 14, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: const Color(0xFFD4A847),
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: const Text(
-                      'User Instruction - Rename Record',
-                      style: TextStyle(
-                          color: Colors.white,
-                          fontWeight: FontWeight.bold,
-                          fontSize: 14),
-                    ),
-                  ),
-                  const SizedBox(height: 14),
-                  // Input
-                  TextField(
-                    controller: nameController,
-                    autofocus: true,
-                    onChanged: onChanged,
-                    decoration: InputDecoration(
-                      hintText: 'Enter new name',
-                      isDense: true,
-                      contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 12, vertical: 10),
-                      enabledBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide(
-                          color: isTaken
-                              ? const Color(0xFFE57373)
-                              : Colors.grey.shade400,
-                        ),
-                      ),
-                      focusedBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: BorderSide(
-                          color: isTaken
-                              ? const Color(0xFFE57373)
-                              : const Color(0xFF4CAF50),
-                          width: 2,
-                        ),
-                      ),
-                      errorText: isTaken
-                          ? 'This name is already taken. Please choose another.'
-                          : null,
-                      errorStyle: const TextStyle(
-                          color: Color(0xFFE57373), fontSize: 11),
-                      errorBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide:
-                        const BorderSide(color: Color(0xFFE57373)),
-                      ),
-                      focusedErrorBorder: OutlineInputBorder(
-                        borderRadius: BorderRadius.circular(8),
-                        borderSide: const BorderSide(
-                            color: Color(0xFFE57373), width: 2),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Text('Current name: $currentName.jpeg',
-                      style: const TextStyle(
-                          fontSize: 11, color: Colors.black45)),
-                  const SizedBox(height: 20),
-                  // Buttons
-                  Row(
-                    children: [
-                      Expanded(
-                        child: ElevatedButton(
-                          onPressed: () => Navigator.of(context).pop(),
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFFE57373),
-                            foregroundColor: Colors.white,
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(10)),
-                            padding:
-                            const EdgeInsets.symmetric(vertical: 14),
-                          ),
-                          child: const Text('Cancel',
-                              style: TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.bold)),
-                        ),
-                      ),
-                      const SizedBox(width: 12),
-                      Expanded(
-                        child: ElevatedButton(
-                          onPressed: (isEmpty || isTaken)
-                              ? null
-                              : () async {
-                            final raw =
-                            nameController.text.trim();
-                            Navigator.of(context).pop();
-                            await _renameFile(file, raw);
-                          },
-                          style: ElevatedButton.styleFrom(
-                            backgroundColor: const Color(0xFF4CAF50),
-                            foregroundColor: Colors.white,
-                            disabledBackgroundColor:
-                            Colors.grey.shade300,
-                            shape: RoundedRectangleBorder(
-                                borderRadius: BorderRadius.circular(10)),
-                            padding:
-                            const EdgeInsets.symmetric(vertical: 14),
-                          ),
-                          child: const Text('Confirm',
-                              style: TextStyle(
-                                  fontSize: 15,
-                                  fontWeight: FontWeight.bold)),
-                        ),
-                      ),
-                    ],
-                  ),
-                ],
-              ),
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Future<void> _renameFile(File file, String newName) async {
-    try {
-      String newFileName =
-      newName.endsWith('.jpeg') ? newName : '$newName.jpeg';
-      newFileName = newFileName.replaceAll(' ', '_');
-      final String newPath =
-      p.join(file.parent.path, newFileName);
-
-      // Rename JSON sidecar first
-      await ScanStore.rename(file.path, newPath);
-
-      await file.rename(newPath);
-      loadFiles();
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Renamed to "$newFileName"'),
-            backgroundColor: const Color(0xFF4CAF50),
-          ),
-        );
-      }
-    } catch (e) {
-      debugPrint('Rename error: $e');
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to rename file.'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
-    }
-  }
-
   // Single delete confirmation
-  void _confirmSingleDelete(File file) {
+  void _confirmSingleDelete(Directory dir) {
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(
@@ -365,11 +139,11 @@ class RecordsScreenState extends State<RecordsScreen> {
               ),
             ),
             const SizedBox(height: 14),
-            const Text('Are you sure you want to delete this file?',
+            const Text('Are you sure you want to delete this record?',
                 style: TextStyle(fontSize: 14)),
             const SizedBox(height: 8),
             const Text(
-              '*Note : Deleting this file will permanently remove it from the app records and phone storage.',
+              '*Note : Deleting this record will permanently remove it (all photos and data) from the app and phone storage.',
               style: TextStyle(fontSize: 12, color: Colors.black54),
             ),
             const SizedBox(height: 6),
@@ -398,8 +172,7 @@ class RecordsScreenState extends State<RecordsScreen> {
                   child: ElevatedButton(
                     onPressed: () async {
                       Navigator.of(context).pop();
-                      ScanStore.delete(file.path); // delete JSON sidecar
-                      await file.delete();
+                      await ScanStore.delete(dir);
                       loadFiles();
                     },
                     style: ElevatedButton.styleFrom(
@@ -452,11 +225,11 @@ class RecordsScreenState extends State<RecordsScreen> {
               ),
             ),
             const SizedBox(height: 14),
-            const Text('Are you sure you want to delete selected files?',
+            const Text('Are you sure you want to delete selected records?',
                 style: TextStyle(fontSize: 14)),
             const SizedBox(height: 8),
             const Text(
-              '*Note : Deleting these files will permanently remove it from the app records and phone storage.',
+              '*Note : Deleting these records will permanently remove them from the app and phone storage.',
               style: TextStyle(fontSize: 12, color: Colors.black54),
             ),
             const SizedBox(height: 6),
@@ -486,8 +259,7 @@ class RecordsScreenState extends State<RecordsScreen> {
                     onPressed: () async {
                       Navigator.of(context).pop();
                       for (final path in _selected) {
-                        ScanStore.delete(path); // delete JSON sidecar
-                        await File(path).delete();
+                        await ScanStore.delete(Directory(path));
                       }
                       _unselectAll();
                       loadFiles();
@@ -687,7 +459,7 @@ class RecordsScreenState extends State<RecordsScreen> {
           ),
           const SizedBox(height: 4),
 
-          // File list
+          // Record list
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
@@ -713,34 +485,33 @@ class RecordsScreenState extends State<RecordsScreen> {
                     horizontal: 12, vertical: 8),
                 itemCount: _filtered.length,
                 itemBuilder: (context, index) {
-                  final file = _filtered[index];
-                  final name =
-                  p.basenameWithoutExtension(file.path);
-                  final date = file.lastModifiedSync();
+                  final dir = _filtered[index];
+                  final name = p.basename(dir.path);
+                  final record = ScanStore.load(dir);
+                  final date = record?.scannedAt ?? dir.statSync().modified;
                   final isSelected =
-                  _selected.contains(file.path);
+                  _selected.contains(dir.path);
 
                   return _RecordCard(
-                    file: file,
+                    dir: dir,
                     name: name,
                     date: date,
                     isSelected: isSelected,
                     isSelecting: _isSelecting,
                     onTap: () {
                       if (_isSelecting) {
-                        _toggleSelect(file.path);
+                        _toggleSelect(dir.path);
                       } else {
                         Navigator.of(context).push(
                           MaterialPageRoute(
                             builder: (_) => RecordDetailScreen(
-                                file: file),
+                                recordDir: dir),
                           ),
                         );
                       }
                     },
-                    onDelete: () => _confirmSingleDelete(file),
-                    onSelect: () => _toggleSelect(file.path),
-                    onRename: () => _confirmRename(file),
+                    onDelete: () => _confirmSingleDelete(dir),
+                    onSelect: () => _toggleSelect(dir.path),
                   );
                 },
               ),
@@ -837,7 +608,7 @@ class _SortChip extends StatelessWidget {
 // ── Record card ──────────────────────────────────────────────────────────────
 
 class _RecordCard extends StatelessWidget {
-  final File file;
+  final Directory dir;
   final String name;
   final DateTime date;
   final bool isSelected;
@@ -845,10 +616,9 @@ class _RecordCard extends StatelessWidget {
   final VoidCallback onTap;
   final VoidCallback onDelete;
   final VoidCallback onSelect;
-  final VoidCallback onRename;
 
   const _RecordCard({
-    required this.file,
+    required this.dir,
     required this.name,
     required this.date,
     required this.isSelected,
@@ -856,7 +626,6 @@ class _RecordCard extends StatelessWidget {
     required this.onTap,
     required this.onDelete,
     required this.onSelect,
-    required this.onRename,
   });
 
   String _formatDate(DateTime dt) =>
@@ -904,9 +673,9 @@ class _RecordCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final data = ScanStore.load(file.path);
-    final status = data?['status'] as String? ?? '—';
-    final keyword = data?['matchedKeyword'] as String? ?? '—';
+    final record = ScanStore.load(dir);
+    final status = record?.statusLabel ?? '—';
+    final keyword = record?.matchedKeyword ?? '—';
     final visuals = _statusVisuals(status);
 
     return GestureDetector(
@@ -945,30 +714,20 @@ class _RecordCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Name row with rename + delete + checkbox
+                    // Name row + delete + checkbox (name is NOT editable —
+                    // renaming after save is intentionally unsupported to
+                    // prevent tampering with data already reported upstream)
                     Row(
                       children: [
                         Expanded(
-                          child: GestureDetector(
-                            onTap: onRename,
-                            child: Row(
-                              children: [
-                                Expanded(
-                                  child: Text(
-                                    name,
-                                    style: const TextStyle(
-                                      fontSize: 14,
-                                      fontWeight: FontWeight.w600,
-                                      color: AppColors.text,
-                                    ),
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
-                                ),
-                                const SizedBox(width: 4),
-                                Icon(Icons.edit,
-                                    size: 13, color: AppColors.muted),
-                              ],
+                          child: Text(
+                            name,
+                            style: const TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.text,
                             ),
+                            overflow: TextOverflow.ellipsis,
                           ),
                         ),
                         const SizedBox(width: 6),

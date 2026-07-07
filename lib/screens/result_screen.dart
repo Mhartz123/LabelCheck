@@ -1,13 +1,17 @@
 import 'package:flutter/material.dart';
-import '../services/fda_checker.dart';
+import '../models/scan_record.dart';
+import '../theme/app_colors.dart';
 
 class ResultScreen extends StatelessWidget {
-  final ScanResult result;
+  final ScanRecord record;
 
-  const ResultScreen({super.key, required this.result});
+  const ResultScreen({super.key, required this.record});
 
   @override
   Widget build(BuildContext context) {
+    final isCompliant = record.status == ComplianceStatus.compliant;
+    final isBanned = record.status == ComplianceStatus.banned;
+
     return Scaffold(
       backgroundColor: Colors.white,
       appBar: AppBar(
@@ -16,94 +20,171 @@ class ResultScreen extends StatelessWidget {
         foregroundColor: Colors.black,
         elevation: 0,
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            // Status badge
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.symmetric(vertical: 20),
-              decoration: BoxDecoration(
-                color: result.statusColor,
-                borderRadius: BorderRadius.circular(12),
-              ),
+      body: Column(
+        children: [
+          Expanded(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.all(20),
               child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(
-                    result.status == ComplianceStatus.compliant
-                        ? Icons.check_circle
-                        : result.status == ComplianceStatus.banned
-                        ? Icons.dangerous
-                        : Icons.warning,
-                    color: Colors.white,
-                    size: 48,
+                  // Status badge
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(vertical: 20),
+                    decoration: BoxDecoration(
+                      color: record.statusColor,
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: Column(
+                      children: [
+                        Icon(
+                          record.statusIcon,
+                          color: Colors.white,
+                          size: 48,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          record.statusLabel,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 1.2,
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
-                  const SizedBox(height: 8),
-                  Text(
-                    result.statusLabel,
-                    style: const TextStyle(
-                      color: Colors.white,
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 1.2,
+
+                  const SizedBox(height: 20),
+
+                  // Why it's non-compliant / flagged
+                  if (!isCompliant)
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: isBanned
+                            ? AppColors.bannedBg
+                            : AppColors.nonCompliantBg,
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Row(
+                            children: [
+                              Icon(
+                                Icons.warning_amber_rounded,
+                                color: isBanned
+                                    ? AppColors.bannedText
+                                    : AppColors.nonCompliantText,
+                                size: 18,
+                              ),
+                              const SizedBox(width: 6),
+                              Text(
+                                isBanned
+                                    ? "Why it's flagged"
+                                    : "Why it's non-compliant",
+                                style: TextStyle(
+                                  fontWeight: FontWeight.bold,
+                                  fontSize: 13.5,
+                                  color: isBanned
+                                      ? AppColors.bannedText
+                                      : AppColors.nonCompliantText,
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 8),
+                          for (final reason in record.reasons)
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 4),
+                              child: Text('•  $reason',
+                                  style: const TextStyle(fontSize: 13)),
+                            ),
+                        ],
+                      ),
+                    ),
+
+                  if (!isCompliant) const SizedBox(height: 20),
+
+                  // Product info
+                  Text('PRODUCT',
+                      style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.muted)),
+                  const SizedBox(height: 2),
+                  Text(record.productName,
+                      style: const TextStyle(
+                          fontSize: 17, fontWeight: FontWeight.bold)),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(child: _labeledField('BRAND', record.brand)),
+                      Expanded(
+                          child: _labeledField(
+                              'EXPIRATION', record.expiration)),
+                    ],
+                  ),
+
+                  const SizedBox(height: 20),
+
+                  // Ingredient list
+                  const Text('Ingredient list',
+                      style: TextStyle(
+                          fontWeight: FontWeight.bold, fontSize: 14)),
+                  const SizedBox(height: 6),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.grey.shade100,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Text(
+                      record.ingredients,
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  ),
+
+                  const SizedBox(height: 16),
+
+                  // Damage check placeholder — seam for future YOLOv8 model
+                  Container(
+                    width: double.infinity,
+                    padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                    decoration: BoxDecoration(
+                      color: AppColors.surfaceAlt,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(Icons.construction,
+                            size: 15, color: AppColors.muted),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            'Packaging damage check: ${record.damageCheck.message}',
+                            style: TextStyle(
+                                fontSize: 11.5, color: AppColors.muted),
+                          ),
+                        ),
+                      ],
                     ),
                   ),
                 ],
               ),
             ),
+          ),
 
-            const SizedBox(height: 20),
-
-            // Matched keyword
-            const Text('Detection Basis',
-                style: TextStyle(
-                    fontWeight: FontWeight.bold, fontSize: 14)),
-            const SizedBox(height: 6),
-            Container(
-              width: double.infinity,
-              padding: const EdgeInsets.all(12),
-              decoration: BoxDecoration(
-                color: Colors.grey.shade100,
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: Text(
-                result.matchedKeyword,
-                style: const TextStyle(fontSize: 13),
-              ),
-            ),
-
-            const SizedBox(height: 20),
-
-            // Extracted text
-            const Text('Extracted Label Text',
-                style: TextStyle(
-                    fontWeight: FontWeight.bold, fontSize: 14)),
-            const SizedBox(height: 6),
-            Expanded(
-              child: Container(
-                width: double.infinity,
-                padding: const EdgeInsets.all(12),
-                decoration: BoxDecoration(
-                  color: Colors.grey.shade100,
-                  borderRadius: BorderRadius.circular(8),
-                ),
-                child: SingleChildScrollView(
-                  child: Text(
-                    result.extractedText.isEmpty
-                        ? 'No text detected. Try scanning again with better lighting.'
-                        : result.extractedText,
-                    style: const TextStyle(fontSize: 12),
-                  ),
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 20),
-
-            // Scan again button
-            SizedBox(
+          // Scan again button — fixed footer
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+            child: SizedBox(
               width: double.infinity,
               child: ElevatedButton(
                 onPressed: () => Navigator.of(context).pop(),
@@ -119,9 +200,24 @@ class ResultScreen extends StatelessWidget {
                         fontSize: 16, fontWeight: FontWeight.bold)),
               ),
             ),
-          ],
-        ),
+          ),
+        ],
       ),
+    );
+  }
+
+  Widget _labeledField(String label, String value) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(label,
+            style: TextStyle(
+                fontSize: 10.5,
+                fontWeight: FontWeight.w600,
+                color: AppColors.muted)),
+        const SizedBox(height: 2),
+        Text(value, style: const TextStyle(fontSize: 13.5)),
+      ],
     );
   }
 }

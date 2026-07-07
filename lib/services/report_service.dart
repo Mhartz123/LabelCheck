@@ -1,7 +1,8 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:http/http.dart' as http;
-import 'fda_checker.dart';
+import '../models/scan_record.dart';
+import 'scan_store.dart';
 
 /// Submits flagged (NON-COMPLIANT or BANNED) scan results to the
 /// LabelCheck central dashboard hosted on Vercel + Supabase.
@@ -31,12 +32,12 @@ class ReportService {
   /// Submit a scan result. Only NON-COMPLIANT and WARNING/BANNED are sent.
   /// Returns true on success, false on failure or if status is not flagged.
   static Future<bool> submit({
-    required String photoPath,
-    required ScanResult result,
+    required Directory recordDir,
+    required ScanRecord record,
     required String productName,
   }) async {
     // Only send flagged results
-    if (result.status == ComplianceStatus.compliant) return false;
+    if (record.status == ComplianceStatus.compliant) return false;
 
     // Skip if endpoint hasn't been configured yet
     if (_endpoint.contains('YOUR_PROJECT_NAME')) {
@@ -45,8 +46,8 @@ class ReportService {
 
     try {
       final payload = await _buildPayload(
-        photoPath: photoPath,
-        result: result,
+        recordDir: recordDir,
+        record: record,
         productName: productName,
       );
 
@@ -66,16 +67,16 @@ class ReportService {
   }
 
   static Future<Map<String, dynamic>> _buildPayload({
-    required String photoPath,
-    required ScanResult result,
+    required Directory recordDir,
+    required ScanRecord record,
     required String productName,
   }) async {
     String? imageBase64;
 
     if (_includeImage) {
-      final file = File(photoPath);
-      if (file.existsSync()) {
-        final bytes = await file.readAsBytes();
+      final photos = ScanStore.photosInOrder(recordDir);
+      if (photos.isNotEmpty) {
+        final bytes = await photos.first.readAsBytes();
         if (bytes.lengthInBytes <= _maxImageBytes) {
           imageBase64 = 'data:image/jpeg;base64,${base64Encode(bytes)}';
         }
@@ -85,10 +86,14 @@ class ReportService {
     return {
       'id': '${DateTime.now().millisecondsSinceEpoch}_${productName.hashCode.abs()}',
       'productName': productName,
-      'status': result.statusLabel,
-      'matchedKeyword': result.matchedKeyword,
-      'extractedText': result.extractedText,
-      'scannedAt': DateTime.now().toIso8601String(),
+      'status': record.statusLabel,
+      'matchedKeyword': record.matchedKeyword,
+      'reasons': record.reasons,
+      'brand': record.brand,
+      'expiration': record.expiration,
+      'ingredients': record.ingredients,
+      'extractedText': record.extractedText,
+      'scannedAt': record.scannedAt.toIso8601String(),
       if (imageBase64 != null) 'imageBase64': imageBase64,
     };
   }

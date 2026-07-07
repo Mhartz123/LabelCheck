@@ -1,7 +1,5 @@
 import 'dart:io';
-import 'package:flutter/material.dart' show Color, Colors;
 import 'package:path/path.dart' as p;
-import 'package:path_provider/path_provider.dart';
 import 'package:pdf/pdf.dart';
 import 'package:pdf/widgets.dart' as pw;
 import '../services/scan_store.dart';
@@ -23,42 +21,38 @@ class ReportBuilder {
   static const _warningBg = PdfColor.fromInt(0xFFFFF8E1);
   static const _warningText = PdfColor.fromInt(0xFF5C4A1E);
 
-  /// Loads all photos + their sidecar JSON files and builds the PDF.
+  /// Loads all record folders and their data.json files and builds the PDF.
   /// Returns the in-memory PDF bytes ready for [Printing.layoutPdf].
   static Future<pw.Document> build() async {
-    final dir = await _photoDir();
-    final files = _loadAllFiles(dir);
-    final records = _parseRecords(files);
+    final dir = await ScanStore.rootDir();
+    final dirs = _loadAllRecordDirs(dir);
+    final records = _parseRecords(dirs);
     return _buildDocument(records);
   }
 
-  // ── File loading ─────────────────────────────────────────────────────────
+  // ── Record loading ───────────────────────────────────────────────────────
 
-  static Future<Directory> _photoDir() async {
-    final appDir = await getApplicationDocumentsDirectory();
-    return Directory(p.join(appDir.path, 'UI_Prototype_Photos'));
-  }
-
-  static List<File> _loadAllFiles(Directory dir) {
+  static List<Directory> _loadAllRecordDirs(Directory dir) {
     if (!dir.existsSync()) return [];
     return dir
         .listSync()
-        .whereType<File>()
-        .where((f) => f.path.endsWith('.jpeg') || f.path.endsWith('.jpg'))
+        .whereType<Directory>()
         .toList()
-      ..sort((a, b) =>
-          b.lastModifiedSync().compareTo(a.lastModifiedSync()));
+      ..sort((a, b) => b
+          .statSync()
+          .modified
+          .compareTo(a.statSync().modified));
   }
 
-  static List<_Record> _parseRecords(List<File> files) {
-    return files.map((f) {
-      final data = ScanStore.load(f.path);
+  static List<_Record> _parseRecords(List<Directory> dirs) {
+    return dirs.map((d) {
+      final record = ScanStore.load(d);
       return _Record(
-        name: p.basenameWithoutExtension(f.path),
-        date: f.lastModifiedSync(),
-        status: data?['status'] as String? ?? '—',
-        keyword: data?['matchedKeyword'] as String? ?? '—',
-        file: f,
+        name: p.basename(d.path),
+        date: record?.scannedAt ?? d.statSync().modified,
+        status: record?.statusLabel ?? '—',
+        keyword: record?.matchedKeyword ?? '—',
+        dir: d,
       );
     }).toList();
   }
@@ -426,13 +420,13 @@ class _Record {
   final DateTime date;
   final String status;
   final String keyword;
-  final File file;
+  final Directory dir;
 
   const _Record({
     required this.name,
     required this.date,
     required this.status,
     required this.keyword,
-    required this.file,
+    required this.dir,
   });
 }

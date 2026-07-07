@@ -1,51 +1,107 @@
 import 'dart:convert';
 import 'dart:io';
 import 'package:path/path.dart' as p;
+import 'package:path_provider/path_provider.dart';
+import '../models/scan_record.dart';
 
-/// Saves and loads scan results alongside saved photos.
-/// Each photo gets a matching .json file with the same base name.
+/// Folder-per-record storage.
+///
+/// `UI_Prototype_Photos/<RecordName>/`
+///   front.jpg
+///   back.jpg    (omitted if skipped)
+///   side1.jpg
+///   side2.jpg   (omitted if skipped)
+///   data.json
+///
+/// There is intentionally no rename() — once a record is saved its name
+/// cannot be changed, to prevent tampering with data that may already have
+/// been submitted to the centralization dashboard.
 class ScanStore {
-  static String _jsonPath(String photoPath) {
-    final dir = p.dirname(photoPath);
-    final base = p.basenameWithoutExtension(photoPath);
-    return p.join(dir, '$base.json');
+  static const String rootFolderName = 'UI_Prototype_Photos';
+
+  static Future<Directory> rootDir() async {
+    final appDir = await getApplicationDocumentsDirectory();
+    final dir = Directory(p.join(appDir.path, rootFolderName));
+    if (!await dir.exists()) await dir.create(recursive: true);
+    return dir;
   }
 
-  static Future<void> save({
-    required String photoPath,
-    required String status,
-    required String matchedKeyword,
-    required String extractedText,
+  /// Sanitizes a raw user-entered name into a safe folder name.
+  static String sanitizeName(String raw) {
+    var name = raw.trim().replaceAll(' ', '_');
+    name = name.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
+    return name;
+  }
+
+  static Future<bool> recordExists(String rawName) async {
+    if (rawName.trim().isEmpty) return false;
+    final root = await rootDir();
+    final dir = Directory(p.join(root.path, sanitizeName(rawName)));
+    return dir.existsSync();
+  }
+
+  /// Creates `<root>/<sanitized name>/`, copies each captured temp photo
+  /// into its slot filename, writes data.json. Returns the created
+  /// record directory.
+  static Future<Directory> save({
+    required String rawName,
+    required Map<PhotoSlot, String> capturedPhotoPaths,
+    required ScanRecord record,
   }) async {
-    final data = {
-      'status': status,
-      'matchedKeyword': matchedKeyword,
-      'extractedText': extractedText,
-      'scannedAt': DateTime.now().toIso8601String(),
-    };
-    await File(_jsonPath(photoPath))
-        .writeAsString(jsonEncode(data));
+    final root = await rootDir();
+    final name = sanitizeName(rawName);
+    final dir = Directory(p.join(root.path, name));
+    await dir.create(recursive: true);
+
+    for (final entry in capturedPhotoPaths.entries) {
+      final destPath = p.join(dir.path, '${entry.key.fileBaseName}.jpg');
+      await File(entry.value).copy(destPath);
+    }
+
+    final jsonFile = File(p.join(dir.path, 'data.json'));
+    await jsonFile.writeAsString(jsonEncode(record.toJson()));
+
+    return dir;
   }
 
-  static Map<String, dynamic>? load(String photoPath) {
-    final f = File(_jsonPath(photoPath));
-    if (!f.existsSync()) return null;
+  /// Lists all record folders under root (unsorted — caller sorts).
+  static Future<List<Directory>> listRecordDirs() async {
+    final root = await rootDir();
+    if (!root.existsSync()) return [];
+    return root.listSync().whereType<Directory>().toList();
+  }
+
+  static ScanRecord? load(Directory recordDir) {
+    final jsonFile = File(p.join(recordDir.path, 'data.json'));
+    if (!jsonFile.existsSync()) return null;
     try {
-      return jsonDecode(f.readAsStringSync()) as Map<String, dynamic>;
+      final map = jsonDecode(jsonFile.readAsStringSync()) as Map<String, dynamic>;
+      return ScanRecord.fromJson(map);
     } catch (_) {
       return null;
     }
   }
 
-  static void delete(String photoPath) {
-    final f = File(_jsonPath(photoPath));
-    if (f.existsSync()) f.deleteSync();
+  /// Returns whichever slot photos exist in [recordDir], in canonical
+  /// Front/Back/Side1/Side2 order. Missing (skipped) slots are omitted.
+  static List<File> photosInOrder(Directory recordDir) {
+    const order = [
+      PhotoSlot.front,
+      PhotoSlot.back,
+      PhotoSlot.side1,
+      PhotoSlot.side2,
+    ];
+    final result = <File>[];
+    for (final slot in order) {
+      final f = File(p.join(recordDir.path, '${slot.fileBaseName}.jpg'));
+      if (f.existsSync()) result.add(f);
+    }
+    return result;
   }
 
-  static Future<void> rename(String oldPath, String newPath) async {
-    final oldJson = File(_jsonPath(oldPath));
-    if (oldJson.existsSync()) {
-      await oldJson.rename(_jsonPath(newPath));
+  static Future<void> delete(Directory recordDir) async {
+    if (await recordDir.exists()) {
+      await recordDir.delete(recursive: true);
     }
   }
 }

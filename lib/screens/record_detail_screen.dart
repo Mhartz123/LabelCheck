@@ -1,64 +1,22 @@
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:path/path.dart' as p;
+import '../models/scan_record.dart';
 import '../services/scan_store.dart';
-
-enum ComplianceStatus { compliant, nonCompliant, banned, unknown }
-
-extension ComplianceStatusExtension on ComplianceStatus {
-  String get label {
-    switch (this) {
-      case ComplianceStatus.compliant: return 'Compliant';
-      case ComplianceStatus.nonCompliant: return 'Non-Compliant';
-      case ComplianceStatus.banned: return 'Banned';
-      case ComplianceStatus.unknown: return '—';
-    }
-  }
-
-  Color get color {
-    switch (this) {
-      case ComplianceStatus.compliant: return const Color(0xFF4CAF50);
-      case ComplianceStatus.nonCompliant: return const Color(0xFFFFEB3B);
-      case ComplianceStatus.banned: return const Color(0xFFE57373);
-      case ComplianceStatus.unknown: return Colors.grey;
-    }
-  }
-
-  String get note {
-    switch (this) {
-      case ComplianceStatus.compliant:
-        return 'Product is compliant with the FDA and is safe to consume. Please refer to instructions / professionals with regards to safe dosage.';
-      case ComplianceStatus.nonCompliant:
-        return 'Product is non-compliant with the FDA and is inadvisable to consume. Please refer to the local FDA hotline near you to report this occurrence.';
-      case ComplianceStatus.banned:
-        return 'Product is banned by the FDA, dangerous to consume. Please immediately refer to the local FDA hotline near you to report this occurrence.';
-      case ComplianceStatus.unknown:
-        return 'Compliance data not yet available.';
-    }
-  }
-
-  Color get noteColor {
-    switch (this) {
-      case ComplianceStatus.compliant: return Colors.black54;
-      case ComplianceStatus.nonCompliant:
-      case ComplianceStatus.banned: return const Color(0xFFE57373);
-      case ComplianceStatus.unknown: return Colors.black54;
-    }
-  }
-}
+import '../theme/app_colors.dart';
 
 class RecordDetailScreen extends StatefulWidget {
-  final File file;
-  const RecordDetailScreen({super.key, required this.file});
+  final Directory recordDir;
+  const RecordDetailScreen({super.key, required this.recordDir});
 
   @override
   State<RecordDetailScreen> createState() => _RecordDetailScreenState();
 }
 
 class _RecordDetailScreenState extends State<RecordDetailScreen> {
-  ComplianceStatus _status = ComplianceStatus.unknown;
-  String _productType = '—';
-  double? _confidence;
+  ScanRecord? _record;
+  List<File> _photos = [];
+  int _mainPhotoIndex = 0;
 
   String _formatDate(DateTime dt) =>
       '${dt.year}-${_pad(dt.month)}-${_pad(dt.day)}  ${_pad(dt.hour)}:${_pad(dt.minute)}';
@@ -67,52 +25,94 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
   @override
   void initState() {
     super.initState();
-    _loadSavedResult(); // load on open
+    _record = ScanStore.load(widget.recordDir);
+    _photos = ScanStore.photosInOrder(widget.recordDir);
   }
 
-  void _loadSavedResult() {
-    final data = ScanStore.load(widget.file.path);
-    if (data != null) {
-      final statusStr = data['status'] as String? ?? '';
-      setState(() {
-        _status = _statusFromString(statusStr);
-        _productType = 'OTC Food Supplement';
-        _confidence = 1.0; // keyword match = 100% confidence
-      });
-    }
-  }
-
-  ComplianceStatus _statusFromString(String s) {
-    if (s == 'COMPLIANT') return ComplianceStatus.compliant;
-    if (s == 'WARNING / BANNED') return ComplianceStatus.banned;
-    if (s == 'NON-COMPLIANT') return ComplianceStatus.nonCompliant;
-    return ComplianceStatus.unknown;
+  void _openFullscreen(int index) {
+    if (_photos.isEmpty) return;
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => _FullscreenPhotoViewer(
+          photos: _photos,
+          initialIndex: index,
+        ),
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final name = p.basenameWithoutExtension(widget.file.path);
-    final date = widget.file.lastModifiedSync();
+    final name = p.basename(widget.recordDir.path);
+    final record = _record;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Compliance Check', style: TextStyle(fontWeight: FontWeight.bold)),
+        title: const Text('Compliance Check',
+            style: TextStyle(fontWeight: FontWeight.bold)),
         backgroundColor: Colors.white,
         foregroundColor: Colors.black,
         elevation: 1,
         centerTitle: true,
       ),
       backgroundColor: Colors.white,
-      body: SingleChildScrollView(
+      body: record == null
+          ? const Center(child: Text('Record data not found.'))
+          : SingleChildScrollView(
         padding: const EdgeInsets.all(16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            // Product image
-            ClipRRect(
-              borderRadius: BorderRadius.circular(12),
-              child: Image.file(widget.file, width: double.infinity, height: 240, fit: BoxFit.cover),
+            // Main product photo
+            GestureDetector(
+              onTap: () => _openFullscreen(_mainPhotoIndex),
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: _photos.isEmpty
+                    ? Container(
+                  width: double.infinity,
+                  height: 240,
+                  color: Colors.grey.shade200,
+                  child: Icon(Icons.image_not_supported_outlined,
+                      color: Colors.grey.shade400, size: 48),
+                )
+                    : Image.file(_photos[_mainPhotoIndex],
+                    width: double.infinity, height: 240, fit: BoxFit.cover),
+              ),
             ),
+
+            if (_photos.length > 1) ...[
+              const SizedBox(height: 10),
+              SizedBox(
+                height: 64,
+                child: ListView.separated(
+                  scrollDirection: Axis.horizontal,
+                  itemCount: _photos.length,
+                  separatorBuilder: (_, __) => const SizedBox(width: 8),
+                  itemBuilder: (context, i) => GestureDetector(
+                    onTap: () => setState(() => _mainPhotoIndex = i),
+                    onDoubleTap: () => _openFullscreen(i),
+                    child: Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(8),
+                        border: Border.all(
+                          color: i == _mainPhotoIndex
+                              ? AppColors.accentLight
+                              : AppColors.border,
+                          width: i == _mainPhotoIndex ? 2 : 1,
+                        ),
+                      ),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(7),
+                        child: Image.file(_photos[i],
+                            width: 64, height: 64, fit: BoxFit.cover),
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+
             const SizedBox(height: 16),
 
             // Info card
@@ -131,28 +131,71 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text('FDA Status : ${_status.label}', style: const TextStyle(fontSize: 13)),
-                          const SizedBox(height: 4),
-                          Text('Product Type : $_productType', style: const TextStyle(fontSize: 13)),
-                          const SizedBox(height: 4),
-                          Text('Confidence : ${_confidence != null ? _confidence!.toStringAsFixed(2) : '—'}', style: const TextStyle(fontSize: 13)),
-                        ],
-                      ),
+                      Text(record.statusTitle,
+                          style: TextStyle(
+                              color: record.statusColor,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 16)),
                       Container(
-                        width: 24, height: 24,
-                        decoration: BoxDecoration(color: _status.color, borderRadius: BorderRadius.circular(4)),
+                        width: 24,
+                        height: 24,
+                        decoration: BoxDecoration(
+                            color: record.statusColor,
+                            borderRadius: BorderRadius.circular(4)),
                       ),
                     ],
                   ),
                   const Divider(height: 20),
-                  Text('Name : $name', style: const TextStyle(fontSize: 13)),
+                  _row('Product', record.productName),
                   const SizedBox(height: 4),
-                  Text('Date : ${_formatDate(date)}', style: const TextStyle(fontSize: 13)),
+                  _row('Brand', record.brand),
+                  const SizedBox(height: 4),
+                  _row('Expiration', record.expiration),
+                  const SizedBox(height: 4),
+                  _row('Type', 'OTC Food Supplement'),
                   const Divider(height: 20),
-                  Text('Note : ${_status.note}', style: TextStyle(fontSize: 12, color: _status.noteColor)),
+                  Text('INGREDIENTS',
+                      style: TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w600,
+                          color: AppColors.muted)),
+                  const SizedBox(height: 4),
+                  Text(record.ingredients,
+                      style: const TextStyle(fontSize: 13)),
+                  const Divider(height: 20),
+                  _row('Name', name),
+                  const SizedBox(height: 4),
+                  _row('Date', _formatDate(record.scannedAt)),
+                  const Divider(height: 20),
+                  Text('Note : ${record.note}',
+                      style:
+                      TextStyle(fontSize: 12, color: record.noteColor)),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // Damage check placeholder — seam for future YOLOv8 model
+            Container(
+              width: double.infinity,
+              padding:
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              decoration: BoxDecoration(
+                color: Colors.grey.shade100,
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: Colors.grey.shade300),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.construction, size: 15, color: AppColors.muted),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Packaging damage check: ${record.damageCheck.message}',
+                      style:
+                      TextStyle(fontSize: 12, color: AppColors.muted),
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -161,23 +204,64 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
             // FDA Hotline
             Container(
               width: double.infinity,
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 14, vertical: 12),
               decoration: BoxDecoration(
                 color: Colors.grey.shade100,
                 borderRadius: BorderRadius.circular(10),
                 border: Border.all(color: Colors.grey.shade300),
               ),
               child: Text(
-                'FDA Hotline : ${_status == ComplianceStatus.unknown ? '—' : 'XXX-XXXX-XXX'}',
+                'FDA Hotline : ${record.status == ComplianceStatus.compliant ? 'XXX-XXXX-XXX' : 'XXX-XXXX-XXX'}',
                 style: TextStyle(
                   fontSize: 13,
                   fontWeight: FontWeight.w500,
-                  color: _status == ComplianceStatus.compliant ? Colors.black87 : const Color(0xFFE57373),
+                  color: record.status == ComplianceStatus.compliant
+                      ? Colors.black87
+                      : const Color(0xFFE57373),
                 ),
               ),
             ),
-
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _row(String label, String value) {
+    return Text('$label : $value', style: const TextStyle(fontSize: 13));
+  }
+}
+
+// ── Fullscreen photo viewer ─────────────────────────────────────────────────
+
+class _FullscreenPhotoViewer extends StatelessWidget {
+  final List<File> photos;
+  final int initialIndex;
+
+  const _FullscreenPhotoViewer({
+    required this.photos,
+    required this.initialIndex,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      appBar: AppBar(
+        backgroundColor: Colors.black,
+        foregroundColor: Colors.white,
+        elevation: 0,
+      ),
+      body: PageView.builder(
+        controller: PageController(initialPage: initialIndex),
+        itemCount: photos.length,
+        itemBuilder: (context, i) => InteractiveViewer(
+          minScale: 1,
+          maxScale: 4,
+          child: Center(
+            child: Image.file(photos[i], fit: BoxFit.contain),
+          ),
         ),
       ),
     );
