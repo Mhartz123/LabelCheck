@@ -7,7 +7,9 @@ plugins {
 android {
     namespace = "com.example.new_recover"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    // Pin to the NDK actually installed in the SDK (flutter.ndkVersion points
+    // at a version that isn't installed here → "NDK is not installed").
+    ndkVersion = "28.2.13676358"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -24,6 +26,10 @@ android {
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+    }
+
+    aaptOptions {
+        noCompress += "tflite"
     }
 
     buildTypes {

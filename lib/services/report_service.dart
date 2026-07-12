@@ -20,7 +20,7 @@ class ReportService {
   // DO NOT use http://localhost or a LAN IP here — those only work
   // when the server is running on the same network.
   static const String _endpoint =
-      'https://label-check-website.vercel.app/';
+      'https://label-check-website.vercel.app/api/report';
 
   // Set to false to disable image uploads (saves bandwidth / Supabase storage).
   static const bool _includeImage = true;
@@ -89,7 +89,6 @@ class ReportService {
       'status': record.statusLabel,
       'matchedKeyword': record.matchedKeyword,
       'reasons': record.reasons,
-      'brand': record.brand,
       'expiration': record.expiration,
       'ingredients': record.ingredients,
       'extractedText': record.extractedText,

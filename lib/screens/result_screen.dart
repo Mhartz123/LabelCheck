@@ -28,6 +28,10 @@ class ResultScreen extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  const Text('Label compliance',
+                      style: TextStyle(
+                          fontWeight: FontWeight.bold, fontSize: 14)),
+                  const SizedBox(height: 8),
                   // Status badge
                   Container(
                     width: double.infinity,
@@ -121,14 +125,7 @@ class ResultScreen extends StatelessWidget {
                       style: const TextStyle(
                           fontSize: 17, fontWeight: FontWeight.bold)),
                   const SizedBox(height: 10),
-                  Row(
-                    children: [
-                      Expanded(child: _labeledField('BRAND', record.brand)),
-                      Expanded(
-                          child: _labeledField(
-                              'EXPIRATION', record.expiration)),
-                    ],
-                  ),
+                  _labeledField('EXPIRATION', record.expiration),
 
                   const SizedBox(height: 20),
 
@@ -150,32 +147,16 @@ class ResultScreen extends StatelessWidget {
                     ),
                   ),
 
-                  const SizedBox(height: 16),
+                  const SizedBox(height: 24),
 
-                  // Damage check placeholder — seam for future YOLOv8 model
-                  Container(
-                    width: double.infinity,
-                    padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-                    decoration: BoxDecoration(
-                      color: AppColors.surfaceAlt,
-                      borderRadius: BorderRadius.circular(8),
-                    ),
-                    child: Row(
-                      children: [
-                        Icon(Icons.construction,
-                            size: 15, color: AppColors.muted),
-                        const SizedBox(width: 8),
-                        Expanded(
-                          child: Text(
-                            'Packaging damage check: ${record.damageCheck.message}',
-                            style: TextStyle(
-                                fontSize: 11.5, color: AppColors.muted),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
+                  // ── Packaging / box damage (separate YOLOv8 step) ────────
+                  const Divider(height: 1),
+                  const SizedBox(height: 16),
+                  const Text('Packaging / box damage',
+                      style: TextStyle(
+                          fontWeight: FontWeight.bold, fontSize: 14)),
+                  const SizedBox(height: 8),
+                  _DamageSection(damage: record.damageCheck),
                 ],
               ),
             ),
@@ -218,6 +199,79 @@ class ResultScreen extends StatelessWidget {
         const SizedBox(height: 2),
         Text(value, style: const TextStyle(fontSize: 13.5)),
       ],
+    );
+  }
+}
+
+/// Box/packaging damage result, from the separate YOLOv8 box-photo step.
+/// [DamageCheckResult.available] is false when the check couldn't run (offline
+/// / backend unreachable) — shown as a neutral "unavailable" state distinct
+/// from a clean "no damage" pass.
+class _DamageSection extends StatelessWidget {
+  final DamageCheckResult damage;
+
+  const _DamageSection({required this.damage});
+
+  @override
+  Widget build(BuildContext context) {
+    final unavailable = !damage.available;
+    final damaged = damage.isDamaged;
+
+    final Color bg = damaged
+        ? AppColors.nonCompliantBg
+        : unavailable
+            ? AppColors.surfaceAlt
+            : const Color(0xFFE8F5E9);
+    final Color fg = damaged
+        ? AppColors.nonCompliantText
+        : unavailable
+            ? AppColors.muted
+            : const Color(0xFF2E7D32);
+    final IconData icon = unavailable
+        ? Icons.help_outline
+        : damaged
+            ? Icons.warning_amber_rounded
+            : Icons.check_circle_outline;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: bg,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 18, color: fg),
+              const SizedBox(width: 8),
+              Text(
+                unavailable
+                    ? 'Check unavailable'
+                    : damaged
+                        ? 'Possible damage detected'
+                        : 'No damage detected',
+                style: TextStyle(
+                    fontWeight: FontWeight.bold, fontSize: 13.5, color: fg),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            damage.message,
+            style: TextStyle(fontSize: 12.5, color: fg),
+          ),
+          if (damaged && damage.detections.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(
+              'Detections: ${damage.detections.toSet().join(', ')}',
+              style: TextStyle(fontSize: 12, color: fg),
+            ),
+          ],
+        ],
+      ),
     );
   }
 }

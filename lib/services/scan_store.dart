@@ -7,10 +7,13 @@ import '../models/scan_record.dart';
 /// Folder-per-record storage.
 ///
 /// `UI_Prototype_Photos/<RecordName>/`
-///   front.jpg
-///   back.jpg    (omitted if skipped)
-///   side1.jpg
-///   side2.jpg   (omitted if skipped)
+///   front.jpg          ┐
+///   expiration.jpg     ├ label close-ups (OCR + FDA)
+///   ingredients.jpg    ┘
+///   box_front.jpg      ┐
+///   box_side1.jpg      ├ box shots (YOLOv8 damage)
+///   box_side2.jpg      │
+///   box_back.jpg       ┘
 ///   data.json
 ///
 /// There is intentionally no rename() — once a record is saved its name
@@ -46,6 +49,7 @@ class ScanStore {
   static Future<Directory> save({
     required String rawName,
     required Map<PhotoSlot, String> capturedPhotoPaths,
+    required Map<BoxSlot, String> boxPhotoPaths,
     required ScanRecord record,
   }) async {
     final root = await rootDir();
@@ -54,6 +58,11 @@ class ScanStore {
     await dir.create(recursive: true);
 
     for (final entry in capturedPhotoPaths.entries) {
+      final destPath = p.join(dir.path, '${entry.key.fileBaseName}.jpg');
+      await File(entry.value).copy(destPath);
+    }
+
+    for (final entry in boxPhotoPaths.entries) {
       final destPath = p.join(dir.path, '${entry.key.fileBaseName}.jpg');
       await File(entry.value).copy(destPath);
     }
@@ -82,17 +91,27 @@ class ScanStore {
     }
   }
 
-  /// Returns whichever slot photos exist in [recordDir], in canonical
-  /// Front/Back/Side1/Side2 order. Missing (skipped) slots are omitted.
+  /// Returns whichever slot photos exist in [recordDir], label close-ups
+  /// first (Front/Expiration/Ingredients) then box shots (Front/Side/Side/Back).
+  /// Missing (skipped) slots are omitted.
   static List<File> photosInOrder(Directory recordDir) {
-    const order = [
+    const labelOrder = [
       PhotoSlot.front,
-      PhotoSlot.back,
-      PhotoSlot.side1,
-      PhotoSlot.side2,
+      PhotoSlot.expiration,
+      PhotoSlot.ingredients,
+    ];
+    const boxOrder = [
+      BoxSlot.front,
+      BoxSlot.side1,
+      BoxSlot.side2,
+      BoxSlot.back,
     ];
     final result = <File>[];
-    for (final slot in order) {
+    for (final slot in labelOrder) {
+      final f = File(p.join(recordDir.path, '${slot.fileBaseName}.jpg'));
+      if (f.existsSync()) result.add(f);
+    }
+    for (final slot in boxOrder) {
       final f = File(p.join(recordDir.path, '${slot.fileBaseName}.jpg'));
       if (f.existsSync()) result.add(f);
     }

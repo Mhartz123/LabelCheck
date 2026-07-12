@@ -15,8 +15,10 @@ dependencies:
   path: ^1.9.0
   http: ^1.2.0
   google_mlkit_text_recognition: ^0.14.0
+  image: ^4.2.0
   pdf: ^3.10.8
   printing: ^5.12.0
+  onnxruntime: ^1.4.1
 
 dev_dependencies:
   flutter_test:
@@ -25,3 +27,12 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/tokenizer/vocab.json
+    - assets/data/fda_advisories.json
+    # ONNX semantic-matcher tier (removable bottom layer of the cascade).
+    - assets/model_qint8_arm64.onnx
+    - assets/fda_index_embeddings_fp16.npy
+    - assets/fda_index_names.txt
+    # On-device YOLOv8n packaging-damage detector (replaces the Roboflow API).
+    - assets/damage_yolov8n.onnx

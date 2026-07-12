@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:camera/camera.dart';
 import 'screens/splash_screen.dart';
 import 'screens/home_screen.dart';
@@ -12,6 +13,9 @@ List<CameraDescription> globalCameras = [];
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Portrait by default across the app; the camera screen opts back into
+  // landscape so wide boxes can be captured tilted (see CameraScreen).
+  await SystemChrome.setPreferredOrientations([DeviceOrientation.portraitUp]);
   globalCameras = await availableCameras();
   runApp(const UIPrototypeApp());
 }
@@ -101,6 +105,18 @@ class _AppShellState extends State<AppShell> {
   void _switchTab(int index) {
     if (index == _currentIndex) return;
     setState(() => _currentIndex = index);
+
+    // The camera tab (index 1) allows landscape so wide boxes can be captured
+    // tilted; every other tab stays portrait-locked.
+    SystemChrome.setPreferredOrientations(
+      index == 1
+          ? const [
+              DeviceOrientation.portraitUp,
+              DeviceOrientation.landscapeLeft,
+              DeviceOrientation.landscapeRight,
+            ]
+          : const [DeviceOrientation.portraitUp],
+    );
 
     if (index == 2) {
       // Reload records every time the Records tab is opened, with a

@@ -148,8 +148,6 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
                   const Divider(height: 20),
                   _row('Product', record.productName),
                   const SizedBox(height: 4),
-                  _row('Brand', record.brand),
-                  const SizedBox(height: 4),
                   _row('Expiration', record.expiration),
                   const SizedBox(height: 4),
                   _row('Type', 'OTC Food Supplement'),
@@ -175,30 +173,14 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
             ),
             const SizedBox(height: 16),
 
-            // Damage check placeholder — seam for future YOLOv8 model
-            Container(
-              width: double.infinity,
-              padding:
-              const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: Colors.grey.shade100,
-                borderRadius: BorderRadius.circular(10),
-                border: Border.all(color: Colors.grey.shade300),
-              ),
-              child: Row(
-                children: [
-                  Icon(Icons.construction, size: 15, color: AppColors.muted),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Packaging damage check: ${record.damageCheck.message}',
-                      style:
-                      TextStyle(fontSize: 12, color: AppColors.muted),
-                    ),
-                  ),
-                ],
-              ),
-            ),
+            // ── Packaging / box damage (separate YOLOv8 box-photo step) ──
+            Text('PACKAGING / BOX DAMAGE',
+                style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.muted)),
+            const SizedBox(height: 6),
+            _damageBlock(record),
             const SizedBox(height: 16),
 
             // FDA Hotline
@@ -230,6 +212,61 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
 
   Widget _row(String label, String value) {
     return Text('$label : $value', style: const TextStyle(fontSize: 13));
+  }
+
+  Widget _damageBlock(ScanRecord record) {
+    final damage = record.damageCheck;
+    final unavailable = !damage.available;
+    final damaged = damage.isDamaged;
+
+    final Color fg = damaged
+        ? const Color(0xFFC62828)
+        : unavailable
+            ? AppColors.muted
+            : const Color(0xFF2E7D32);
+    final IconData icon = unavailable
+        ? Icons.help_outline
+        : damaged
+            ? Icons.warning_amber_rounded
+            : Icons.check_circle_outline;
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade100,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: Colors.grey.shade300),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(icon, size: 16, color: fg),
+              const SizedBox(width: 8),
+              Text(
+                unavailable
+                    ? 'Check unavailable'
+                    : damaged
+                        ? 'Possible damage detected'
+                        : 'No damage detected',
+                style: TextStyle(
+                    fontSize: 13, fontWeight: FontWeight.w600, color: fg),
+              ),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(damage.message,
+              style: TextStyle(fontSize: 12, color: fg)),
+          if (damaged && damage.detections.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text('Detections: ${damage.detections.toSet().join(', ')}',
+                style: TextStyle(fontSize: 12, color: fg)),
+          ],
+        ],
+      ),
+    );
   }
 }
 

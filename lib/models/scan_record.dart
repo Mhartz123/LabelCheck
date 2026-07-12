@@ -3,40 +3,87 @@ import 'package:flutter/material.dart';
 /// Compliance classification for a saved record.
 enum ComplianceStatus { compliant, nonCompliant, banned }
 
-/// The four fixed capture slots for a single product scan.
-enum PhotoSlot { front, back, side1, side2 }
+/// The three fixed label-capture slots for a single product scan. Each slot's
+/// OCR text is routed straight to its own record field (see LabelParser)
+/// instead of being guessed out of one combined blob of text. These are the
+/// close-up label shots — cropped to the framing guide before OCR. The
+/// ingredient-list slot feeds the "ingredient list present?" compliance check.
+enum PhotoSlot { front, expiration, ingredients }
 
 extension PhotoSlotX on PhotoSlot {
   String get fileBaseName {
     switch (this) {
       case PhotoSlot.front:
         return 'front';
-      case PhotoSlot.back:
-        return 'back';
-      case PhotoSlot.side1:
-        return 'side1';
-      case PhotoSlot.side2:
-        return 'side2';
+      case PhotoSlot.expiration:
+        return 'expiration';
+      case PhotoSlot.ingredients:
+        return 'ingredients';
     }
   }
 }
 
-/// Placeholder result for the future YOLOv8 packaging-damage model.
-/// [available] stays false until the real model is wired into
-/// [DamageDetectionService].
+/// The four box-capture slots for the packaging-damage step. These are
+/// full-frame shots of the whole box (no crop, no OCR) sent to the YOLOv8
+/// damage API — a separate concern from the label slots above.
+enum BoxSlot { front, side1, side2, back }
+
+extension BoxSlotX on BoxSlot {
+  String get fileBaseName {
+    switch (this) {
+      case BoxSlot.front:
+        return 'box_front';
+      case BoxSlot.side1:
+        return 'box_side1';
+      case BoxSlot.side2:
+        return 'box_side2';
+      case BoxSlot.back:
+        return 'box_back';
+    }
+  }
+}
+
+/// Result of a packaging-damage check via [DamageDetectionService] (backed
+/// by the labelcheck-apii Roboflow workflow). [available] is false when the
+/// check couldn't run at all (no network, backend unreachable) — distinct
+/// from [isDamaged], which is only meaningful when [available] is true.
 class DamageCheckResult {
   final bool available;
   final String message;
+  final bool isDamaged;
+  final List<String> detections;
 
-  const DamageCheckResult({required this.available, required this.message});
+  /// Highest detection confidence (0..1) the damage API returned across all
+  /// box photos, used to gate whether "severe" damage counts against
+  /// compliance. 0 when nothing was detected or confidence wasn't reported.
+  final double maxConfidence;
+
+  const DamageCheckResult({
+    required this.available,
+    required this.message,
+    this.isDamaged = false,
+    this.detections = const [],
+    this.maxConfidence = 0.0,
+  });
 
   const DamageCheckResult.placeholder()
       : available = false,
-        message = 'Damage detection not yet available';
+        message = 'Damage detection not yet available',
+        isDamaged = false,
+        detections = const [],
+        maxConfidence = 0.0;
+
+  /// True if any detection class reads as a scratch (scratches count against
+  /// compliance regardless of confidence).
+  bool get hasScratch =>
+      detections.any((d) => d.toLowerCase().contains('scratch'));
 
   Map<String, dynamic> toJson() => {
         'available': available,
         'message': message,
+        'isDamaged': isDamaged,
+        'detections': detections,
+        'maxConfidence': maxConfidence,
       };
 
   factory DamageCheckResult.fromJson(Map<String, dynamic>? json) {
@@ -45,6 +92,9 @@ class DamageCheckResult {
       available: json['available'] as bool? ?? false,
       message: json['message'] as String? ??
           'Damage detection not yet available',
+      isDamaged: json['isDamaged'] as bool? ?? false,
+      detections: (json['detections'] as List?)?.cast<String>() ?? const [],
+      maxConfidence: (json['maxConfidence'] as num?)?.toDouble() ?? 0.0,
     );
   }
 }
@@ -56,7 +106,6 @@ class ScanRecord {
   final String matchedKeyword;
   final List<String> reasons;
   final String productName;
-  final String brand;
   final String expiration;
   final String ingredients;
   final String extractedText;
@@ -68,7 +117,6 @@ class ScanRecord {
     required this.matchedKeyword,
     required this.reasons,
     required this.productName,
-    required this.brand,
     required this.expiration,
     required this.ingredients,
     required this.extractedText,
@@ -92,7 +140,6 @@ class ScanRecord {
         'matchedKeyword': matchedKeyword,
         'reasons': reasons,
         'productName': productName,
-        'brand': brand,
         'expiration': expiration,
         'ingredients': ingredients,
         'extractedText': extractedText,
@@ -105,7 +152,6 @@ class ScanRecord {
         matchedKeyword: json['matchedKeyword'] as String? ?? '—',
         reasons: (json['reasons'] as List?)?.cast<String>() ?? const [],
         productName: json['productName'] as String? ?? '—',
-        brand: json['brand'] as String? ?? '—',
         expiration: json['expiration'] as String? ?? '—',
         ingredients: json['ingredients'] as String? ?? '—',
         extractedText: json['extractedText'] as String? ?? '',
