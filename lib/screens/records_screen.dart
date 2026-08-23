@@ -29,10 +29,6 @@ class RecordsScreenState extends State<RecordsScreen> {
   bool _isSelecting = false;
   bool _loading = true;
 
-  // Rotating scan-kind filter: cycles Label → Damage → Inspect → Label...
-  // Unlike the Compliant/Non-Compliant/Banned chips, this one is always
-  // active — there's no "off" state, it always shows records of whichever
-  // kind is currently displayed on the button.
   static const List<String> _kindCycle = ['Label', 'Damage', 'Inspect'];
   String _kindFilterLabel = 'Label';
 
@@ -59,9 +55,6 @@ class RecordsScreenState extends State<RecordsScreen> {
     }
   }
 
-  /// Maps the rotating filter's current label to the [ScanKind] a record
-  /// must have to pass. "Inspect" maps to [ScanKind.both], which also covers
-  /// records saved before the label/damage split (see ScanRecord.fromJson).
   ScanKind get _kindFilterValue {
     switch (_kindFilterLabel) {
       case 'Damage':
@@ -153,148 +146,149 @@ class RecordsScreenState extends State<RecordsScreen> {
     });
   }
 
-  // Single delete confirmation
   void _confirmSingleDelete(Directory dir) {
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (context) => Padding(
-        padding: const EdgeInsets.all(20),
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Container(
-              width: double.infinity,
-              padding:
-              const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: const Color(0xFFD4A847),
-                borderRadius: BorderRadius.circular(8),
-              ),
-              child: const Text(
-                'User Instruction - Delete Record',
-                style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 14),
-              ),
-            ),
-            const SizedBox(height: 14),
-            const Text('Are you sure you want to delete this record?',
-                style: TextStyle(fontSize: 14)),
-            const SizedBox(height: 8),
-            const Text(
-              '*Note : Deleting this record will permanently remove it (all photos and data) from the app and phone storage.',
-              style: TextStyle(fontSize: 12, color: Colors.black54),
-            ),
-            const SizedBox(height: 6),
-            const Text('Are you really sure?',
-                style: TextStyle(fontSize: 12, color: Colors.black54)),
-            const SizedBox(height: 20),
-            Row(
-              children: [
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () => Navigator.of(context).pop(),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF4CAF50),
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                    ),
-                    child: const Text('Cancel',
-                        style: TextStyle(
-                            fontSize: 15, fontWeight: FontWeight.bold)),
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: ElevatedButton(
-                    onPressed: () async {
-                      Navigator.of(context).pop();
-                      await ScanStore.delete(dir);
-                      loadFiles();
-                    },
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFE57373),
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
-                      padding: const EdgeInsets.symmetric(vertical: 14),
-                    ),
-                    child: const Text('Delete',
-                        style: TextStyle(
-                            fontSize: 15, fontWeight: FontWeight.bold)),
-                  ),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
+    _showDeleteSheet(
+      title: 'Delete record',
+      subtitle: 'Are you sure you want to delete this record?',
+      note: 'This permanently removes the record — all its photos and data '
+          '— from the app and from phone storage. It cannot be undone.',
+      confirmLabel: 'Delete',
+      onConfirm: () async {
+        await ScanStore.delete(dir);
+        loadFiles();
+      },
     );
   }
 
-  // Multi delete confirmation
   void _confirmMultiDelete() {
+    final count = _selected.length;
+    _showDeleteSheet(
+      title: 'Delete $count record${count == 1 ? '' : 's'}',
+      subtitle: 'Are you sure you want to delete the selected '
+          'record${count == 1 ? '' : 's'}?',
+      note: 'This permanently removes them — all their photos and data — '
+          'from the app and from phone storage. It cannot be undone.',
+      confirmLabel: 'Delete all',
+      onConfirm: () async {
+        for (final path in _selected) {
+          await ScanStore.delete(Directory(path));
+        }
+        _unselectAll();
+        loadFiles();
+      },
+    );
+  }
+
+  void _showDeleteSheet({
+    required String title,
+    required String subtitle,
+    required String note,
+    required String confirmLabel,
+    required Future<void> Function() onConfirm,
+  }) {
     showModalBottomSheet(
       context: context,
+
+      backgroundColor: AppColors.surface,
       shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
       ),
       builder: (context) => Padding(
-        padding: const EdgeInsets.all(20),
+        padding: const EdgeInsets.fromLTRB(20, 10, 20, 20),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
+            Center(
+              child: Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppColors.border,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 18),
+            Row(
+              children: [
+                Container(
+                  width: 40,
+                  height: 40,
+                  decoration: BoxDecoration(
+                    color: AppColors.bannedBg,
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: Icon(Icons.delete_outline,
+                      color: AppColors.bannedText, size: 20),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(title,
+                          style: TextStyle(
+                            fontSize: 17,
+                            fontWeight: FontWeight.bold,
+                            color: AppColors.text,
+                          )),
+                      const SizedBox(height: 2),
+                      Text(subtitle,
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            color: AppColors.muted,
+                          )),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
             Container(
               width: double.infinity,
-              padding:
-              const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+              padding: const EdgeInsets.all(12),
               decoration: BoxDecoration(
-                color: const Color(0xFFD4A847),
-                borderRadius: BorderRadius.circular(8),
+                color: AppColors.bannedBg,
+                borderRadius: BorderRadius.circular(12),
               ),
-              child: const Text(
-                'User Instruction - Delete Records',
-                style: TextStyle(
-                    color: Colors.white,
-                    fontWeight: FontWeight.bold,
-                    fontSize: 14),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.warning_amber_rounded,
+                      size: 16, color: AppColors.bannedText),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      note,
+                      style: TextStyle(
+                        fontSize: 12,
+                        height: 1.4,
+                        color: AppColors.bannedText,
+                      ),
+                    ),
+                  ),
+                ],
               ),
             ),
-            const SizedBox(height: 14),
-            const Text('Are you sure you want to delete selected records?',
-                style: TextStyle(fontSize: 14)),
-            const SizedBox(height: 8),
-            const Text(
-              '*Note : Deleting these records will permanently remove them from the app and phone storage.',
-              style: TextStyle(fontSize: 12, color: Colors.black54),
-            ),
-            const SizedBox(height: 6),
-            const Text('Are you really sure?',
-                style: TextStyle(fontSize: 12, color: Colors.black54)),
             const SizedBox(height: 20),
             Row(
               children: [
                 Expanded(
-                  child: ElevatedButton(
+                  child: OutlinedButton(
                     onPressed: () => Navigator.of(context).pop(),
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF4CAF50),
-                      foregroundColor: Colors.white,
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: AppColors.text,
+                      backgroundColor: AppColors.surface,
+                      side: BorderSide(color: AppColors.border),
                       shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
-                      padding: const EdgeInsets.symmetric(vertical: 14),
+                          borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(vertical: 15),
                     ),
                     child: const Text('Cancel',
                         style: TextStyle(
-                            fontSize: 15, fontWeight: FontWeight.bold)),
+                            fontSize: 15, fontWeight: FontWeight.w600)),
                   ),
                 ),
                 const SizedBox(width: 12),
@@ -302,21 +296,18 @@ class RecordsScreenState extends State<RecordsScreen> {
                   child: ElevatedButton(
                     onPressed: () async {
                       Navigator.of(context).pop();
-                      for (final path in _selected) {
-                        await ScanStore.delete(Directory(path));
-                      }
-                      _unselectAll();
-                      loadFiles();
+                      await onConfirm();
                     },
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFFE57373),
+                      backgroundColor: const Color(0xFFC62828),
                       foregroundColor: Colors.white,
+                      elevation: 0,
                       shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(10)),
-                      padding: const EdgeInsets.symmetric(vertical: 14),
+                          borderRadius: BorderRadius.circular(12)),
+                      padding: const EdgeInsets.symmetric(vertical: 15),
                     ),
-                    child: const Text('Delete',
-                        style: TextStyle(
+                    child: Text(confirmLabel,
+                        style: const TextStyle(
                             fontSize: 15, fontWeight: FontWeight.bold)),
                   ),
                 ),
@@ -328,14 +319,12 @@ class RecordsScreenState extends State<RecordsScreen> {
     );
   }
 
-  // ── Generate PDF report ───────────────────────────────────────────────────
   Future<void> _generateReport() async {
-    // Show loading indicator
+
     showDialog(
       context: context,
       barrierDismissible: false,
-      // Was `const Center(...)` — dropped since AppColors.accentLight now
-      // varies with the theme toggle.
+
       builder: (_) => Center(
         child: CircularProgressIndicator(color: AppColors.accentLight),
       ),
@@ -344,16 +333,15 @@ class RecordsScreenState extends State<RecordsScreen> {
     try {
       final pw.Document pdf = await ReportBuilder.build();
       if (!mounted) return;
-      Navigator.of(context).pop(); // dismiss loading
+      Navigator.of(context).pop();
 
-      // Open the built-in PDF preview (includes share + print buttons)
       await Printing.layoutPdf(
         onLayout: (_) async => pdf.save(),
         name: 'CheckMuna_Compliance_Report_${DateTime.now().millisecondsSinceEpoch}.pdf',
       );
     } catch (e) {
       if (!mounted) return;
-      Navigator.of(context).pop(); // dismiss loading
+      Navigator.of(context).pop();
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text('Failed to generate report: $e'),
@@ -367,10 +355,7 @@ class RecordsScreenState extends State<RecordsScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        // Was `const Text(...)` — dropped since AppColors.text now varies
-        // with the theme toggle.
-        // Left-aligned and 15px to match Home's 'CheckMuna' title, so the
-        // header row doesn't shift when switching tabs.
+
         titleSpacing: 16,
         title: Text('Records',
             style: TextStyle(
@@ -381,22 +366,16 @@ class RecordsScreenState extends State<RecordsScreen> {
         foregroundColor: AppColors.text,
         elevation: 0,
         centerTitle: false,
-        // Pinned to match Home's custom header height (32px logo + 12*2
-        // padding = 56), so switching tabs shows no vertical shift.
+
         toolbarHeight: 56,
-        // Was `const Border(...)` — dropped since AppColors.border now
-        // varies with the theme toggle.
+
         shape: Border(
           bottom: BorderSide(color: AppColors.border, width: 0.6),
         ),
         actions: [
-          // Theme toggle here as well as on the Homepage, so switching does
-          // not require leaving the Records tab. Never `const` — this tab
-          // stays mounted, and an identical const instance is what makes
-          // Flutter skip the rebuild that re-reads AppColors.
+
           ThemeToggleButton(),
-          // PDF export as a labelled green pill (Clean Clinical mockup) rather
-          // than a bare icon, so the primary export action reads clearly.
+
           Padding(
             padding: const EdgeInsets.only(right: 10, top: 8, bottom: 8),
             child: Material(
@@ -431,7 +410,7 @@ class RecordsScreenState extends State<RecordsScreen> {
       backgroundColor: AppColors.bg,
       body: Column(
         children: [
-          // Sort bar
+
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
             child: Column(
@@ -470,10 +449,7 @@ class RecordsScreenState extends State<RecordsScreen> {
                           _applySort();
                         }),
                     const SizedBox(width: 6),
-                    // Rotating scan-kind filter — tap to cycle through
-                    // Label → Damage → Inspect. Always active (no "off"
-                    // state), unlike the Compliant/Non-Compliant/Banned
-                    // chips below.
+
                     _CycleFilterChip(
                       label: _kindFilterLabel,
                       color: _kindFilterColor,
@@ -525,14 +501,12 @@ class RecordsScreenState extends State<RecordsScreen> {
             ),
           ),
 
-          // Search bar
           Padding(
             padding:
             const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
             child: TextField(
               onChanged: _onSearchChanged,
-              // Was `const TextStyle` — dropped since AppColors.text now
-              // varies with the theme toggle.
+
               style: TextStyle(fontSize: 13, color: AppColors.text),
               decoration: InputDecoration(
                 hintText: 'Search by name',
@@ -552,8 +526,7 @@ class RecordsScreenState extends State<RecordsScreen> {
                 ),
                 focusedBorder: OutlineInputBorder(
                   borderRadius: BorderRadius.circular(10),
-                  // Was `const BorderSide` — dropped since
-                  // AppColors.accentLight now varies with the theme toggle.
+
                   borderSide: BorderSide(color: AppColors.accentLight, width: 1.5),
                 ),
                 suffixIcon:
@@ -563,7 +536,6 @@ class RecordsScreenState extends State<RecordsScreen> {
           ),
           const SizedBox(height: 4),
 
-          // Record list
           Expanded(
             child: _loading
                 ? const Center(child: CircularProgressIndicator())
@@ -622,12 +594,6 @@ class RecordsScreenState extends State<RecordsScreen> {
             ),
           ),
 
-          // Multi-select bottom bar — always in the tree, slid down and
-          // faded out when not selecting, so it animates up into place when
-          // selection starts instead of popping in.
-          // AnimatedSize collapses the reserved height when hidden (the bar
-          // is always mounted for the slide animation, so without this it
-          // would leave a permanent empty strip below the list).
           AnimatedSize(
             duration: const Duration(milliseconds: 240),
             curve: Curves.easeOutCubic,
@@ -655,22 +621,18 @@ class RecordsScreenState extends State<RecordsScreen> {
                     children: [
                       TextButton.icon(
                         onPressed: _selectAll,
-                        // Was `const Icon(...)` — dropped since AppColors.muted
-                        // now varies with the theme toggle.
+
                         icon: Icon(Icons.select_all, color: AppColors.muted),
-                        // Was `const Text(...)` — dropped since AppColors.muted
-                        // now varies with the theme toggle.
+
                         label: Text('Select All',
                             style: TextStyle(color: AppColors.muted)),
                       ),
                       TextButton.icon(
                         onPressed: _unselectAll,
-                        // Was `const Icon(...)` — dropped since AppColors.muted
-                        // now varies with the theme toggle.
+
                         icon: Icon(Icons.check_box_outline_blank,
                             color: AppColors.muted),
-                        // Was `const Text(...)` — dropped since AppColors.muted
-                        // now varies with the theme toggle.
+
                         label: Text('Unselect All',
                             style: TextStyle(color: AppColors.muted)),
                       ),
@@ -696,8 +658,6 @@ class RecordsScreenState extends State<RecordsScreen> {
     );
   }
 }
-
-// ── Sort chip ────────────────────────────────────────────────────────────────
 
 class _SortChip extends StatelessWidget {
   final String label;
@@ -739,11 +699,6 @@ class _SortChip extends StatelessWidget {
   }
 }
 
-// ── Rotating scan-kind filter chip ─────────────────────────────────────────
-
-/// Unlike [_SortChip], this chip has no on/off state — it always shows one
-/// of three labels and always acts as an active filter. Tapping it cycles to
-/// the next label (see [RecordsScreenState._cycleKindFilter]).
 class _CycleFilterChip extends StatelessWidget {
   final String label;
   final Color color;
@@ -786,8 +741,6 @@ class _CycleFilterChip extends StatelessWidget {
   }
 }
 
-// ── Record card ──────────────────────────────────────────────────────────────
-
 class _RecordCard extends StatelessWidget {
   final Directory dir;
   final String name;
@@ -813,7 +766,6 @@ class _RecordCard extends StatelessWidget {
       '${dt.year} / ${_pad(dt.month)} / ${_pad(dt.day)}';
   String _pad(int n) => n.toString().padLeft(2, '0');
 
-  // Maps the saved status string to icon + colors for the leading circle.
   ({IconData icon, Color bg, Color fg, Color pillBg, Color pillText}) _statusVisuals(
       String status) {
     switch (status) {
@@ -878,7 +830,7 @@ class _RecordCard extends StatelessWidget {
           child: Row(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Status icon circle — leading visual indicator
+
               Container(
                 width: 44,
                 height: 44,
@@ -891,22 +843,17 @@ class _RecordCard extends StatelessWidget {
               ),
               const SizedBox(width: 12),
 
-              // Main content column
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    // Name row + delete + checkbox (name is NOT editable —
-                    // renaming after save is intentionally unsupported to
-                    // prevent tampering with data already reported upstream)
+
                     Row(
                       children: [
                         Expanded(
                           child: Text(
                             name,
-                            // Was `const TextStyle` — dropped since
-                            // AppColors.text now varies with the theme
-                            // toggle.
+
                             style: TextStyle(
                               fontSize: 14,
                               fontWeight: FontWeight.w600,
@@ -916,7 +863,7 @@ class _RecordCard extends StatelessWidget {
                           ),
                         ),
                         const SizedBox(width: 8),
-                        // Delete button — slightly enlarged tap target.
+
                         GestureDetector(
                           onTap: onDelete,
                           child: Container(
@@ -931,10 +878,9 @@ class _RecordCard extends StatelessWidget {
                                 color: AppColors.bannedText, size: 16),
                           ),
                         ),
-                        // Wider gap between the two controls so they're not
-                        // easily mis-tapped.
+
                         const SizedBox(width: 10),
-                        // Multi-select circle — sized to match delete.
+
                         GestureDetector(
                           onTap: onSelect,
                           child: Container(
@@ -958,17 +904,14 @@ class _RecordCard extends StatelessWidget {
                     ),
                     const SizedBox(height: 3),
 
-                    // Date
                     Text(
                       _formatDate(date),
-                      // Was `const TextStyle` — dropped since
-                      // AppColors.muted now varies with the theme toggle.
+
                       style: TextStyle(
                           fontSize: 11.5, color: AppColors.muted),
                     ),
                     const SizedBox(height: 8),
 
-                    // Compliance pill (+ packaging type, if any) + detection basis
                     Row(
                       crossAxisAlignment: CrossAxisAlignment.center,
                       children: [
@@ -999,9 +942,7 @@ class _RecordCard extends StatelessWidget {
                             ),
                             child: Text(
                               packagingType.label,
-                              // Was `const TextStyle` — dropped since
-                              // AppColors.muted now varies with the theme
-                              // toggle.
+
                               style: TextStyle(
                                 fontSize: 10.5,
                                 color: AppColors.muted,
@@ -1016,8 +957,7 @@ class _RecordCard extends StatelessWidget {
                       const SizedBox(height: 5),
                       Text(
                         'Detection basis: $keyword',
-                        // Was `const TextStyle` — dropped since
-                        // AppColors.muted now varies with the theme toggle.
+
                         style: TextStyle(
                             fontSize: 11.5, color: AppColors.muted),
                         overflow: TextOverflow.ellipsis,
@@ -1027,7 +967,6 @@ class _RecordCard extends StatelessWidget {
                 ),
               ),
 
-              // Trailing chevron to signal tappability
               const SizedBox(width: 4),
               Padding(
                 padding: const EdgeInsets.only(top: 12),
