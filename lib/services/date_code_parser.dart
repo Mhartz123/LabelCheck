@@ -26,12 +26,24 @@ class DateCode {
   /// Why the read is unreadable or ambiguous, for the report.
   final String? note;
 
+  /// Name of the pattern the expiry matched, e.g. `DD/MM/YYYY`. Null when no
+  /// expiry was read. Carried so the evaluation harness can report accuracy
+  /// per printed format rather than as one pooled number — a pipeline that is
+  /// perfect on slash-separated dates and blind on compact ones is a different
+  /// problem from one that is uniformly mediocre.
+  final String? matchedFormat;
+
+  /// The exact substring the expiry was read out of, for the same reason.
+  final String? sourceText;
+
   const DateCode({
     this.manufactured,
     this.expiry,
     this.batch,
     required this.status,
     this.note,
+    this.matchedFormat,
+    this.sourceText,
   });
 }
 
@@ -49,6 +61,11 @@ const double kProximityLineHeights = 1.5;
 const int kMinShelfLifeMonths = 6;
 const int kMaxShelfLifeMonths = 72;
 const int kMaxExpiryYearsAhead = 10;
+
+/// A date this far in the past is a misread, not a very old product. Without
+/// this floor a DD/MM/YY code read as MM/YY resolves into the 2000s and is
+/// reported as decades expired with full confidence.
+const int kMaxExpiryYearsBehind = 10;
 
 /// Month abbreviations as printed on packaging.
 ///
@@ -99,21 +116,62 @@ class DateCodeParser {
   // lookahead lets EXP match "EXP03/2028" (no word boundary between P and 0)
   // while still rejecting EXPORT, and the longer spellings come first so they
   // are not shadowed by the short one.
-  static final RegExp _mfgAnchor =
-      RegExp(r'\b(?:MFG|MFD)(?![A-Za-z])', caseSensitive: false);
-  static final RegExp _expAnchor =
-      RegExp(r'\b(?:EXPIRY|EXPIRATION|EXP)(?![A-Za-z])', caseSensitive: false);
+  static final RegExp _mfgAnchor = RegExp(
+      r'\b(?:MANUFACTUR[A-Z]*|PRODUCTION|MFG|MFD|PROD)(?![A-Za-z])',
+      caseSensitive: false);
+
+  // "BEST BEFORE", "USE BY" and "VALID UNTIL" are as common as EXP on
+  // Philippine OTC packaging, and without them a pack carrying one reads as an
+  // unlabelled single date and is downgraded to ambiguous. The multi-word forms
+  // allow the space to be missing, which is how they come back off a tight
+  // crop, and the longer spellings come first so EXPIRY is not shadowed by EXP.
+  static final RegExp _expAnchor = RegExp(
+      r'\b(?:BEST\s*BEFORE(?:\s*END)?|USE\s*BY'
+      r'|VALID\s*(?:UNTIL|THROUGH|THRU|TO)'
+      r'|EXPIRATION|EXPIRES|EXPIRY|EXP|BBE|BB)(?![A-Za-z])',
+      caseSensitive: false);
+
   static final RegExp _batchAnchor =
       RegExp(r'\b(?:BATCH|LOT)(?![A-Za-z])', caseSensitive: false);
 
-  // Longest first; each match consumes its span so a DD/MM/YYYY reading is
-  // never re-read as the MM/YYYY sitting inside it.
-  static final RegExp _dayMonthYear = RegExp(
-      r'(?<!\d)(0[1-9]|[12]\d|3[01])\s*[/\-.]\s*(0[1-9]|1[0-2])\s*[/\-.]\s*(20\d{2})(?!\d)');
+  /// One separator between date components: punctuation with optional spaces
+  /// around it, or plain whitespace on its own. Overprinters use all of them,
+  /// and `EXP 10 2028` is no rarer than `EXP 10/2028`.
+  // The repeat count is not cosmetic: a dot-matrix head renders a hyphen as
+  // two short dashes often enough that `MAR--25` is the printed form, and a
+  // single-character separator class does not match it.
+  static const String _sep = r'(?:\s*[/.\-]{1,2}\s*|\s+)';
+
+  /// As [_sep], but optional — the alphabetic forms are frequently solid.
+  static const String _optSep = r'\s*[/.\-]{0,2}\s*';
+
+  // Longest first; each match consumes its span so a three-component reading is
+  // never re-read as the two-component date sitting inside it.
+  //
+  // Day and month share ONE pattern rather than having a DD/MM one and an
+  // MM/DD one, because which is which is a property of the values, not of
+  // whichever regex happened to match first. Two competing patterns let
+  // `12/31/2028` fall past the DD/MM pattern (31 is not a month) into a
+  // two-component reading of `12/31` as December 2031 — a confident answer
+  // three years wrong. See [_dayMonthToken].
+  static final RegExp _numericTriple =
+      RegExp('(?<!\\d)(\\d{1,2})$_sep(\\d{1,2})$_sep(20\\d{2}|\\d{2})(?!\\d)');
+
   static final RegExp _monthYear =
-      RegExp(r'(?<!\d)(0[1-9]|1[0-2])\s*[/\-.]\s*(20\d{2})(?!\d)');
+      RegExp('(?<!\\d)(0?[1-9]|1[0-2])$_sep(20\\d{2})(?!\\d)');
+
   static final RegExp _monthShortYear =
-      RegExp(r'(?<!\d)(0[1-9]|1[0-2])\s*[/\-.]\s*(\d{2})(?!\d)');
+      RegExp('(?<!\\d)(0[1-9]|1[0-2])$_sep(\\d{2})(?!\\d)');
+
+  // Separator-less forms, which is how a continuous-inkjet head usually
+  // prints. There is no delimiter to key on, so the components are taken
+  // positionally and the four-digit year anchors which end is which.
+  static final RegExp _compactIso = RegExp(
+      r'(?<!\d)(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?!\d)');
+  static final RegExp _compactDayMonthYear =
+      RegExp(r'(?<!\d)(\d{2})(\d{2})(20\d{2})(?!\d)');
+  static final RegExp _compactMonthYear =
+      RegExp(r'(?<!\d)(0[1-9]|1[0-2])(20\d{2})(?!\d)');
 
   static const String _monthNamePattern =
       'JAN|FEB|MAR|APR|MAY|JUN|JUL|AUG|SEP|OCT|NOV|DEC';
@@ -129,7 +187,23 @@ class DateCodeParser {
   static final RegExp _monthNameYear = RegExp(
       r'(?<![A-Za-z0-9])(?:'
       '$_monthNamePattern'
-      r')[A-Za-z]*\s*[-/.]?\s*(20\d{2})(?!\d)',
+      r')[A-Za-z]*\s*[-/.]{0,2}\s*(20\d{2})(?!\d)',
+      caseSensitive: false);
+
+  // Two-digit-year alphabetic forms. `MAR--25` is a complete expiry as printed
+  // on a Philippine carton, and without these it matches nothing here and is
+  // picked up by the batch scanner instead — the date is not merely missed, it
+  // is filed as a lot number. The trailing (?!\d) keeps these off a four-digit
+  // year, so `JAN 2029` still belongs to the patterns above.
+  static final RegExp _dayMonthNameShortYear = RegExp(
+      r'(?<![A-Za-z0-9])(\d{1,2})' '$_optSep' r'(?:'
+      '$_monthNamePattern'
+      r')[A-Za-z]*' '$_optSep' r'(\d{2})(?!\d)',
+      caseSensitive: false);
+  static final RegExp _monthNameShortYear = RegExp(
+      r'(?<![A-Za-z0-9])(?:'
+      '$_monthNamePattern'
+      r')[A-Za-z]*' '$_optSep' r'(\d{2})(?!\d)',
       caseSensitive: false);
 
   /// ISO order, which some overprinters use: 2028-02-04.
@@ -229,12 +303,24 @@ class DateCodeParser {
           'assumed the earliest and latest.';
     }
 
+    // A day/month pair that the printed code itself does not disambiguate is
+    // a real uncertainty about the date, not a detail of how it was matched,
+    // so it has to reach the compliance engine as one.
+    if (expiryToken != null && expiryToken.orderAmbiguous) {
+      status = DateCodeStatus.ambiguous;
+      const ordering = 'Day and month are both 12 or under, so the printed '
+          'order could not be determined; read as day first.';
+      note = note == null ? ordering : '$note $ordering';
+    }
+
     return _validate(
       manufactured: manufacturedToken?.asManufactured,
       expiry: expiryToken?.asExpiry,
       batch: batch,
       status: status,
       note: note,
+      matchedFormat: expiryToken?.format,
+      sourceText: expiryToken?.source,
       today: today ?? DateTime.now(),
     );
   }
@@ -252,6 +338,8 @@ class DateCodeParser {
     required String? batch,
     required DateCodeStatus status,
     required String? note,
+    required String? matchedFormat,
+    required String? sourceText,
     required DateTime today,
   }) {
     DateCode unreadable(String why) =>
@@ -271,6 +359,17 @@ class DateCodeParser {
     if (expiry.isAfter(horizon)) {
       return unreadable('Expiry reads more than $kMaxExpiryYearsAhead years '
           'ahead, so at least one digit was misread.');
+    }
+
+    // The floor matters as much as the horizon. A DD/MM/YY code mis-read as
+    // MM/YY lands in the early 2000s, which is not a very old product but a
+    // misread — and without this it would be reported as decades expired with
+    // no hint that anything went wrong.
+    final floor =
+        DateTime(today.year - kMaxExpiryYearsBehind, today.month, today.day);
+    if (expiry.isBefore(floor)) {
+      return unreadable('Expiry reads more than $kMaxExpiryYearsBehind years '
+          'in the past, so at least one digit was misread.');
     }
 
     if (manufactured != null) {
@@ -294,6 +393,8 @@ class DateCodeParser {
       batch: batch,
       status: status,
       note: note,
+      matchedFormat: matchedFormat,
+      sourceText: sourceText,
     );
   }
 
@@ -334,18 +435,8 @@ class DateCodeParser {
     // Alphabetic-month and ISO dates come first, and off the raw text: digit
     // normalization would turn 04FEB2028 into 04FE82028 and destroy the month
     // before it could ever be matched.
-    for (final pattern in <RegExp>[
-      _dayMonthNameYear,
-      _monthNameYear,
-      _isoDate,
-    ]) {
-      for (final match in pattern.allMatches(_mask(raw, claimed))) {
-        if (_anyClaimed(claimed, match.start, match.end)) continue;
-        final token = _tokenFrom(pattern, match, index, box);
-        if (token == null) continue;
-        tokens.add(token);
-        claim(match.start, match.end);
-      }
+    for (final spec in _rawPatterns) {
+      _collect(spec, _mask(raw, claimed), index, box, claimed, tokens, claim);
     }
 
     // Digit normalization then applies to whatever is left, which by now has
@@ -353,18 +444,8 @@ class DateCodeParser {
     // contribute a stray 6 to the digits beside it.
     final normalized = _normalizeDigits(_mask(raw, claimed));
 
-    for (final pattern in <RegExp>[
-      _dayMonthYear,
-      _monthYear,
-      _monthShortYear,
-    ]) {
-      for (final match in pattern.allMatches(normalized)) {
-        if (_anyClaimed(claimed, match.start, match.end)) continue;
-        final token = _tokenFrom(pattern, match, index, box);
-        if (token == null) continue;
-        tokens.add(token);
-        claim(match.start, match.end);
-      }
+    for (final spec in _digitPatterns) {
+      _collect(spec, normalized, index, box, claimed, tokens, claim);
     }
 
     // Batch candidates come off the raw text, never the normalized text.
@@ -407,48 +488,155 @@ class DateCodeParser {
     return buffer.toString();
   }
 
-  static _DateToken? _tokenFrom(
-    RegExp pattern,
+  /// Runs one pattern over [text] and files any tokens it yields.
+  static void _collect(
+    _DatePattern spec,
+    String text,
+    int lineIndex,
+    Rect box,
+    List<bool> claimed,
+    List<_DateToken> tokens,
+    void Function(int, int) claim,
+  ) {
+    for (final match in spec.pattern.allMatches(text)) {
+      if (_anyClaimed(claimed, match.start, match.end)) continue;
+      final token = spec.build(match, spec.name, lineIndex, box);
+      if (token == null) continue;
+      tokens.add(token);
+      claim(match.start, match.end);
+    }
+  }
+
+  /// Patterns read off the raw text, before digit normalization.
+  static final List<_DatePattern> _rawPatterns = <_DatePattern>[
+    _DatePattern('DD MMM YYYY', _dayMonthNameYear, (m, name, i, box) {
+      final month = _monthOf(m.group(0)!);
+      if (month == null) return null;
+      return _dateToken(
+          int.parse(m.group(2)!), month, int.parse(m.group(1)!), name, m, i, box);
+    }),
+    _DatePattern('DD MMM YY', _dayMonthNameShortYear, (m, name, i, box) {
+      final month = _monthOf(m.group(0)!);
+      if (month == null) return null;
+      return _dateToken(2000 + int.parse(m.group(2)!), month,
+          int.parse(m.group(1)!), name, m, i, box);
+    }),
+    _DatePattern('MMM YYYY', _monthNameYear, (m, name, i, box) {
+      final month = _monthOf(m.group(0)!);
+      if (month == null) return null;
+      return _dateToken(int.parse(m.group(1)!), month, null, name, m, i, box);
+    }),
+    _DatePattern('MMM YY', _monthNameShortYear, (m, name, i, box) {
+      final month = _monthOf(m.group(0)!);
+      if (month == null) return null;
+      return _dateToken(2000 + int.parse(m.group(1)!), month, null, name, m, i,
+          box);
+    }),
+    _DatePattern('YYYY/MM/DD', _isoDate, (m, name, i, box) => _dateToken(
+        int.parse(m.group(1)!), int.parse(m.group(2)!), int.parse(m.group(3)!),
+        name, m, i, box)),
+  ];
+
+  /// Patterns read off the digit-normalized text. Order matters: each match
+  /// claims its span, so the longer forms have to run first or a compact
+  /// eight-digit code is shredded into a shorter reading of its own prefix.
+  static final List<_DatePattern> _digitPatterns = <_DatePattern>[
+    _DatePattern('YYYYMMDD', _compactIso, (m, name, i, box) => _dateToken(
+        int.parse(m.group(1)!), int.parse(m.group(2)!), int.parse(m.group(3)!),
+        name, m, i, box)),
+    _DatePattern('DDMMYYYY', _compactDayMonthYear, (m, name, i, box) =>
+        _dayMonthToken(int.parse(m.group(1)!), int.parse(m.group(2)!),
+            int.parse(m.group(3)!), name, m, i, box)),
+    _DatePattern('DD/MM/YYYY', _numericTriple, (m, name, i, box) {
+      final raw = m.group(3)!;
+      // A two-digit year is read into the 2000s, matching every other
+      // short-year form here.
+      final year = raw.length == 4 ? int.parse(raw) : 2000 + int.parse(raw);
+      return _dayMonthToken(int.parse(m.group(1)!), int.parse(m.group(2)!),
+          year, raw.length == 4 ? name : 'DD/MM/YY', m, i, box);
+    }),
+    _DatePattern('MM/YYYY', _monthYear, (m, name, i, box) => _dateToken(
+        int.parse(m.group(2)!), int.parse(m.group(1)!), null, name, m, i, box)),
+    _DatePattern('MMYYYY', _compactMonthYear, (m, name, i, box) => _dateToken(
+        int.parse(m.group(2)!), int.parse(m.group(1)!), null, name, m, i, box)),
+    _DatePattern('MM/YY', _monthShortYear, (m, name, i, box) => _dateToken(
+        2000 + int.parse(m.group(2)!), int.parse(m.group(1)!), null,
+        name, m, i, box)),
+  ];
+
+  /// Builds a token from components whose roles are already known.
+  static _DateToken? _dateToken(
+    int year,
+    int month,
+    int? day,
+    String format,
     RegExpMatch match,
     int lineIndex,
     Rect box,
   ) {
-    if (pattern == _dayMonthNameYear) {
-      final month = _monthOf(match.group(0)!);
-      if (month == null) return null;
-      final day = int.parse(match.group(1)!);
-      final year = int.parse(match.group(2)!);
-      if (day > _daysInMonth(year, month)) return null;
-      return _DateToken(year, month, day, lineIndex, match.start, box);
-    }
-    if (pattern == _monthNameYear) {
-      final month = _monthOf(match.group(0)!);
-      if (month == null) return null;
-      return _DateToken(
-          int.parse(match.group(1)!), month, null, lineIndex, match.start, box);
-    }
-    if (pattern == _isoDate) {
-      final year = int.parse(match.group(1)!);
-      final month = int.parse(match.group(2)!);
-      final day = int.parse(match.group(3)!);
-      if (day > _daysInMonth(year, month)) return null;
-      return _DateToken(year, month, day, lineIndex, match.start, box);
-    }
-    if (pattern == _dayMonthYear) {
-      final day = int.parse(match.group(1)!);
-      final month = int.parse(match.group(2)!);
-      final year = int.parse(match.group(3)!);
-      if (day > _daysInMonth(year, month)) return null;
-      return _DateToken(year, month, day, lineIndex, match.start, box);
-    }
-    if (pattern == _monthYear) {
-      return _DateToken(int.parse(match.group(2)!), int.parse(match.group(1)!),
-          null, lineIndex, match.start, box);
-    }
-    // MM/YY, expanded into the 2000s.
-    return _DateToken(2000 + int.parse(match.group(2)!),
-        int.parse(match.group(1)!), null, lineIndex, match.start, box);
+    if (month < 1 || month > 12) return null;
+    if (day != null && (day < 1 || day > _daysInMonth(year, month))) return null;
+    return _DateToken(
+      year,
+      month,
+      day,
+      lineIndex,
+      match.start,
+      box,
+      format: format,
+      source: match.group(0)!,
+    );
   }
+
+  /// Builds a token from two components whose roles are NOT known, deciding
+  /// day-versus-month from the values themselves.
+  ///
+  /// Only one of the pair can exceed 12, so a value that does settles the
+  /// order outright. When neither does the printed code genuinely does not say
+  /// which convention was used — `04/02/2028` is the fourth of February to
+  /// most of the world and the second of April to a US supplier — so the
+  /// reading is marked ambiguous and carries the day-first default rather than
+  /// being silently presented as certain.
+  static _DateToken? _dayMonthToken(
+    int first,
+    int second,
+    int year,
+    String format,
+    RegExpMatch match,
+    int lineIndex,
+    Rect box,
+  ) {
+    int day;
+    int month;
+    var ordered = true;
+    if (first > 12 && second <= 12) {
+      day = first;
+      month = second;
+    } else if (second > 12 && first <= 12) {
+      month = first;
+      day = second;
+    } else if (first <= 12 && second <= 12) {
+      day = first;
+      month = second;
+      ordered = false;
+    } else {
+      return null;
+    }
+
+    if (month < 1 || day < 1 || day > _daysInMonth(year, month)) return null;
+    return _DateToken(
+      year,
+      month,
+      day,
+      lineIndex,
+      match.start,
+      box,
+      format: ordered ? format : '$format (order ambiguous)',
+      source: match.group(0)!,
+      orderAmbiguous: !ordered,
+    );
+  }
+
 
   /// The month number for the abbreviation inside [text], or null.
   static int? _monthOf(String text) {
@@ -590,6 +778,17 @@ class _Anchor implements _Positioned {
   const _Anchor(this.kind, this.lineIndex, this.offset, this.box);
 }
 
+/// One date format the scanner knows, with the builder that turns a match of
+/// it into a token. Bundling the two keeps the format's name attached to the
+/// pattern that produced it, which is what the evaluation harness reports on.
+class _DatePattern {
+  final String name;
+  final RegExp pattern;
+  final _DateToken? Function(RegExpMatch, String, int, Rect) build;
+
+  const _DatePattern(this.name, this.pattern, this.build);
+}
+
 class _DateToken implements _Positioned {
   final int year;
   final int month;
@@ -603,14 +802,26 @@ class _DateToken implements _Positioned {
   final int offset;
   final Rect box;
 
+  /// Name of the pattern that produced this token.
+  final String format;
+
+  /// The substring it was read out of.
+  final String source;
+
+  /// True when day and month could not be told apart from their values.
+  final bool orderAmbiguous;
+
   const _DateToken(
     this.year,
     this.month,
     this.day,
     this.lineIndex,
     this.offset,
-    this.box,
-  );
+    this.box, {
+    this.format = '',
+    this.source = '',
+    this.orderAmbiguous = false,
+  });
 
   /// A month-precision manufacture date starts on the first of the month.
   DateTime get asManufactured => DateTime(year, month, day ?? 1);

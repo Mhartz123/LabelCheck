@@ -17,24 +17,50 @@ enum OcrProfile { productName, dateCode, ingredients }
 // rather than inlined precisely because re-tuning against a larger sample set
 // is expected.
 
+/// Upper bound on the upscale factor per profile. These are ceilings, not
+/// fixed multipliers: the factor actually applied is derived from the source
+/// crop's height so that a bigger capture is not blown up past the point of
+/// usefulness. See [kDateCodeTargetHeight].
 const int kDateCodeUpscale = 4;
 const int kProductNameUpscale = 2;
 const int kIngredientsUpscale = 2;
+
+/// Height, in pixels, that the pipeline aims to hand ML Kit.
+///
+/// These are exactly the working heights the fixed multipliers produced at the
+/// old ResolutionPreset.high geometry (a ~140px-tall date-code crop at 4x, a
+/// ~250px-tall name crop at 2x), so at that capture size behaviour is
+/// unchanged. Above it the factor drops instead of the cost exploding: the
+/// morphology in step 4 is O(n.k) over four passes, and at a 3x larger capture
+/// a fixed 4x upscale would put a 7.4-megapixel buffer through it — seconds of
+/// work on the minimum-spec Cortex-A53, for detail the sensor already resolved.
+const int kDateCodeTargetHeight = 560;
+const int kProductNameTargetHeight = 500;
+const int kIngredientsTargetHeight = 500;
 
 const int kTileGrid = 8;
 const int kStretchLowPercentile = 5;
 const int kStretchHighPercentile = 95;
 
-// Measured, not taken from the brief's table, which specifies 5. A kernel of
-// side k closes a gap of up to k-1 pixels in the UPSCALED image, so at
-// kUpscale 4 it reaches only (k-1)/4 pixels of the original crop: kernel 5
-// reaches one. Cubic upscaling then spreads a one-pixel gap over more than
-// that, so kernel 5 measurably merges nothing at any dot pitch, and step 4
-// becomes a no-op. 9 is the smallest kernel that merges a one-pixel dot gap
-// while still leaving the much wider gaps between characters intact.
-const int kDateCodeCloseKernel = 9;
-const int kProductNameCloseKernel = 0;
-const int kIngredientsCloseKernel = 0;
+// Dot gap the merge in step 4 has to close, measured in pixels of the ORIGINAL
+// crop rather than of the upscaled buffer.
+//
+// A kernel of side k closes a gap of up to k-1 pixels in the upscaled image,
+// so it reaches (k-1)/upscale pixels of the original. Expressing the setting
+// as the source-pixel gap makes the kernel fall out of the upscale factor
+// (`gap * upscale + 1`) and keeps the two in step now that the factor varies:
+// at the calibrated 4x this yields 9, which is the value that was measured.
+// The brief's table specifies 5, which reaches only one source pixel at 4x and
+// so merges nothing at any dot pitch — step 4 becomes a no-op.
+//
+// CAVEAT worth re-measuring: the gap is stated in source pixels, but a higher
+// capture resolution resolves the same physical gap across MORE source pixels,
+// so this constant is itself resolution-dependent. It was measured at
+// ResolutionPreset.high. Re-derive it from the evaluation set before trusting
+// step 4 at ultraHigh.
+const int kDateCodeCloseGapPixels = 2;
+const int kProductNameCloseGapPixels = 0;
+const int kIngredientsCloseGapPixels = 0;
 
 const double kDateCodeUnsharpAmount = 1.6;
 const double kProductNameUnsharpAmount = 1.4;
@@ -71,35 +97,67 @@ const int kEnhancedJpegQuality = 95;
 
 /// Per-profile parameter set. See the calibration table in the thesis.
 class OcrProfileParams {
-  final int upscale;
+  /// Ceiling on the upscale factor. The applied factor comes from
+  /// [upscaleFor].
+  final int maxUpscale;
+
+  /// Height [upscaleFor] aims the upscaled buffer at.
+  final int targetHeight;
+
   final int tileGrid;
   final int stretchLowPercentile;
   final int stretchHighPercentile;
-  final int closeKernel;
+
+  /// Dot gap step 4 must close, in pixels of the source crop. Zero disables
+  /// the morphology entirely.
+  final int closeGapPixels;
+
   final double unsharpAmount;
   final int minContrastSpread;
   final double minSharpness;
   final double maxBlownRatio;
 
   const OcrProfileParams({
-    required this.upscale,
+    required this.maxUpscale,
+    required this.targetHeight,
     required this.tileGrid,
     required this.stretchLowPercentile,
     required this.stretchHighPercentile,
-    required this.closeKernel,
+    required this.closeGapPixels,
     required this.unsharpAmount,
     required this.minContrastSpread,
     required this.minSharpness,
     required this.maxBlownRatio,
   });
 
+  /// Upscale factor for a crop [sourceHeight] pixels tall: enough to reach
+  /// [targetHeight], never more than [maxUpscale], never less than 1.
+  ///
+  /// A capture that already exceeds the target is left at its own resolution.
+  /// Interpolation cannot add detail the sensor did not record, so past that
+  /// point a larger factor buys nothing and costs quadratically.
+  int upscaleFor(int sourceHeight) {
+    if (sourceHeight <= 0) return 1;
+    final wanted = (targetHeight / sourceHeight).round();
+    return wanted.clamp(1, maxUpscale);
+  }
+
+  /// Side of the morphological kernel at a given [upscale], odd by
+  /// construction. Zero when the profile disables the step.
+  int closeKernelFor(int upscale) {
+    if (closeGapPixels <= 0) return 0;
+    final side = closeGapPixels * upscale + 1;
+    return side.isEven ? side + 1 : side;
+  }
+
   /// The full pipeline. Everything in it was tuned for this crop.
   static const OcrProfileParams dateCode = OcrProfileParams(
-    upscale: kDateCodeUpscale,
+    maxUpscale: kDateCodeUpscale,
+    targetHeight: kDateCodeTargetHeight,
     tileGrid: kTileGrid,
     stretchLowPercentile: kStretchLowPercentile,
     stretchHighPercentile: kStretchHighPercentile,
-    closeKernel: kDateCodeCloseKernel,
+    closeGapPixels: kDateCodeCloseGapPixels,
     unsharpAmount: kDateCodeUnsharpAmount,
     minContrastSpread: kDateCodeMinContrastSpread,
     minSharpness: kDateCodeMinSharpness,
@@ -109,11 +167,12 @@ class OcrProfileParams {
   /// Upscale + local stretch + unsharp. Morphology off: the brand name is
   /// large solid type and the kernel would fill its counters.
   static const OcrProfileParams productName = OcrProfileParams(
-    upscale: kProductNameUpscale,
+    maxUpscale: kProductNameUpscale,
+    targetHeight: kProductNameTargetHeight,
     tileGrid: kTileGrid,
     stretchLowPercentile: kStretchLowPercentile,
     stretchHighPercentile: kStretchHighPercentile,
-    closeKernel: kProductNameCloseKernel,
+    closeGapPixels: kProductNameCloseGapPixels,
     unsharpAmount: kProductNameUnsharpAmount,
     minContrastSpread: kProductNameMinContrastSpread,
     minSharpness: kProductNameMinSharpness,
@@ -123,11 +182,12 @@ class OcrProfileParams {
   /// Cheapest path — only the presence of a list is checked downstream, so a
   /// light stretch is enough. Morphology and unsharp both off.
   static const OcrProfileParams ingredients = OcrProfileParams(
-    upscale: kIngredientsUpscale,
+    maxUpscale: kIngredientsUpscale,
+    targetHeight: kIngredientsTargetHeight,
     tileGrid: kTileGrid,
     stretchLowPercentile: kStretchLowPercentile,
     stretchHighPercentile: kStretchHighPercentile,
-    closeKernel: kIngredientsCloseKernel,
+    closeGapPixels: kIngredientsCloseGapPixels,
     unsharpAmount: kIngredientsUnsharpAmount,
     minContrastSpread: kIngredientsMinContrastSpread,
     minSharpness: kIngredientsMinSharpness,
@@ -276,11 +336,12 @@ class OcrPreprocessor {
     //    that the upscale precede the morphology in step 4, so the kernel has
     //    sub-dot resolution to work with, and it still does.
     final scan = _scan(upright);
-    final w = scan.width * params.upscale;
-    final h = scan.height * params.upscale;
-    var buf = params.upscale <= 1
+    final upscale = params.upscaleFor(scan.height);
+    final w = scan.width * upscale;
+    final h = scan.height * upscale;
+    var buf = upscale <= 1
         ? scan.luma
-        : _upscaleCubic(scan.luma, scan.width, scan.height, params.upscale);
+        : _upscaleCubic(scan.luma, scan.width, scan.height, upscale);
 
     // 3. Local contrast stretch. Global stretching fails on these panels
     //    because the lighting across them is uneven — it clips one end while
@@ -300,8 +361,11 @@ class OcrPreprocessor {
     );
 
     // 4. Dot merge, turning clouds of discrete dots into continuous strokes.
-    if (params.closeKernel > 1) {
-      buf = _close(buf, w, h, params.closeKernel);
+    //    The kernel tracks the upscale factor so it keeps reaching the same
+    //    distance in source pixels as the factor varies with capture size.
+    final closeKernel = params.closeKernelFor(upscale);
+    if (closeKernel > 1) {
+      buf = _close(buf, w, h, closeKernel);
     }
 
     // 5. Unsharp, recovering the stroke edges softened by steps 1 and 3.

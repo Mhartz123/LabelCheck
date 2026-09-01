@@ -117,9 +117,9 @@ void main() {
     });
 
     test('the profiles carry different thresholds', () {
-      expect(OcrProfileParams.dateCode.closeKernel, kDateCodeCloseKernel);
-      expect(OcrProfileParams.productName.closeKernel, 0);
-      expect(OcrProfileParams.ingredients.closeKernel, 0);
+      expect(OcrProfileParams.dateCode.closeGapPixels, kDateCodeCloseGapPixels);
+      expect(OcrProfileParams.productName.closeGapPixels, 0);
+      expect(OcrProfileParams.ingredients.closeGapPixels, 0);
     });
   });
 
@@ -137,7 +137,7 @@ void main() {
           greaterThanOrEqualTo(kDateCodeMinContrastSpread));
     });
 
-    test('upscales by the profile factor', () {
+    test('upscales a small crop by the profile ceiling', () {
       final source = _dottedCode();
 
       final dateCode = OcrPreprocessor.run(source, OcrProfile.dateCode);
@@ -146,6 +146,35 @@ void main() {
 
       final productName = OcrPreprocessor.run(source, OcrProfile.productName);
       expect(productName.width, source.width * kProductNameUpscale);
+    });
+
+    test('a crop that already meets the target height is not upscaled', () {
+      // What a higher capture resolution produces. Interpolating this further
+      // adds no detail and puts a needlessly large buffer through the O(n.k)
+      // morphology, so the factor has to fall away on its own.
+      const params = OcrProfileParams.dateCode;
+      expect(params.upscaleFor(kDateCodeTargetHeight), 1);
+      expect(params.upscaleFor(kDateCodeTargetHeight * 2), 1);
+
+      final tall = _filled(320, kDateCodeTargetHeight, 128);
+      final out = OcrPreprocessor.run(tall, OcrProfile.dateCode);
+      expect(out.height, tall.height);
+      expect(out.width, tall.width);
+    });
+
+    test('the close kernel tracks the upscale factor', () {
+      // Calibration is stated in source pixels, so the kernel has to grow with
+      // the factor to keep reaching the same distance on the original crop.
+      // At the measured 4x this must still come out as the value that was
+      // tuned by hand, 9.
+      const params = OcrProfileParams.dateCode;
+      expect(params.closeKernelFor(4), 9);
+      expect(params.closeKernelFor(2), 5);
+      expect(params.closeKernelFor(1), 3);
+
+      // Profiles with morphology off stay off at every factor.
+      expect(OcrProfileParams.productName.closeKernelFor(4), 0);
+      expect(OcrProfileParams.ingredients.closeKernelFor(4), 0);
     });
 
     test('merges a dotted stroke into a continuous one', () {

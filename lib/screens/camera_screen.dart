@@ -64,6 +64,25 @@ const Size _expirationGuideSize = Size(210, 100);
 const Size _damageGuideSize = Size(300, 360);
 const Size _damageGuideSizeLandscape = Size(360, 260);
 
+/// Capture resolution, tried in order until one initializes.
+///
+/// This is the single largest lever on OCR accuracy in the whole pipeline.
+/// ResolutionPreset.high is ~720p, which after the expiration guide crop
+/// (210x100 logical px on a ~411x914 screen) leaves ML Kit roughly 368x140
+/// pixels to read a dot-matrix date code from — glyphs around 15-25px tall,
+/// at or below the recognizer's floor. No amount of upscaling in
+/// OcrPreprocessor can re-add strokes the sensor never sampled.
+///
+/// ultraHigh (~2160p) triples that linearly. `max` is deliberately NOT the
+/// first choice: it is unbounded, and on a 48MP sensor the full-frame decode
+/// in ImageCropper would allocate well over 100MB — the minimum-spec target
+/// device has 3GB of RAM.
+const List<ResolutionPreset> _captureResolutionLadder = <ResolutionPreset>[
+  ResolutionPreset.ultraHigh,
+  ResolutionPreset.veryHigh,
+  ResolutionPreset.high,
+];
+
 const Color _camAccent = Color(0xFF2FD79B);
 const Color _camOnAccent = Color(0xFF04261B);
 const Color _camControlBg = Color(0x8C0E1512);
@@ -291,21 +310,42 @@ class _CameraScreenState extends State<CameraScreen>
     final prev = _controller;
     if (prev != null) await prev.dispose();
 
-    final controller = CameraController(
-      globalCameras[index],
-      ResolutionPreset.high,
-      enableAudio: false,
-    );
-    _controller = controller;
-    try {
-      await controller.initialize();
-      _minZoom = await controller.getMinZoomLevel();
-      _maxZoom = await controller.getMaxZoomLevel();
-      _currentZoom = _minZoom;
-      if (mounted) setState(() => _isReady = true);
-    } catch (e) {
-      debugPrint('Camera init error: $e');
+    // Walk down the ladder rather than trusting the plugin's own fallback,
+    // which is documented as "may fall back to a higher or lower resolution"
+    // and does not guarantee a working session on every device.
+    for (final preset in _captureResolutionLadder) {
+      final controller = CameraController(
+        globalCameras[index],
+        preset,
+        enableAudio: false,
+      );
+      _controller = controller;
+      try {
+        await controller.initialize();
+        _minZoom = await controller.getMinZoomLevel();
+        _maxZoom = await controller.getMaxZoomLevel();
+        _currentZoom = _minZoom;
+        debugPrint('Camera: $preset, preview '
+            '${controller.value.previewSize}, '
+            'aspect ${controller.value.aspectRatio}');
+        if (mounted) setState(() => _isReady = true);
+        return;
+      } catch (e) {
+        debugPrint('Camera init error at $preset: $e');
+        await controller.dispose();
+        _controller = null;
+      }
     }
+  }
+
+  /// Preview width/height as it is actually laid out on screen, matching what
+  /// CameraPreview itself computes. Null until the controller is ready.
+  double? get _previewAspectRatio {
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized) return null;
+    final aspect = controller.value.aspectRatio;
+    if (aspect <= 0) return null;
+    return _isLandscape ? aspect : 1 / aspect;
   }
 
   @override
@@ -414,6 +454,7 @@ class _CameraScreenState extends State<CameraScreen>
           stagedPath,
           screenSize: _previewSize,
           guideRect: guide,
+          previewAspectRatio: _previewAspectRatio,
         );
         final slot = _labelSlots[_slotIndex].slot;
         _labelPaths[slot] = croppedPath;
@@ -558,7 +599,18 @@ class _CameraScreenState extends State<CameraScreen>
     try {
       final decoded = img.decodeImage(await File(path).readAsBytes());
       if (decoded != null) {
+        // Logged per capture because a preprocessing failure currently looks
+        // exactly like preprocessing having worked: the catch below falls back
+        // to the raw file and recognition carries on regardless. Without this
+        // there is no way to tell from a device whether the pipeline ran.
+        final quality = OcrPreprocessor.assess(decoded, profile);
         final enhanced = OcrPreprocessor.run(decoded, profile);
+        debugPrint('OCR $profile: crop ${decoded.width}x${decoded.height} '
+            '-> ${enhanced.width}x${enhanced.height}, '
+            'sharpness ${quality.sharpness.toStringAsFixed(0)}, '
+            'spread ${quality.contrastSpread}, '
+            'blown ${quality.blownRatio.toStringAsFixed(3)}, '
+            'gate ${quality.passes ? "pass" : "FAIL (${quality.failureReason})"}');
         final dir = await AppStorage.capturesDir();
         enhancedPath = await OcrPreprocessor.writeTempJpeg(
           enhanced,
@@ -701,19 +753,35 @@ class _CameraScreenState extends State<CameraScreen>
     ]);
   }
 
+  /// Mean ML Kit line confidence over [recognized], or null when the
+  /// recognizer did not report any.
+  ///
+  /// Null is the expected answer on Android: the plugin forwards
+  /// `Text.Line.getConfidence()` faithfully, but the on-device Latin
+  /// recognizer generally leaves it unset. That matters well beyond this
+  /// method — ComplianceEngine gates its semantic tier on
+  /// `ocrConfidence != null && ocrConfidence < threshold`, so a null here
+  /// means that tier never runs at all. The counts are logged rather than
+  /// assumed because it is a property of the ML Kit build on the device, not
+  /// something that can be settled by reading the source.
   double? _meanLineConfidence(RecognizedText recognized) {
     var sum = 0.0;
-    var count = 0;
+    var withConfidence = 0;
+    var withoutConfidence = 0;
     for (final block in recognized.blocks) {
       for (final line in block.lines) {
         final c = line.confidence;
         if (c != null) {
           sum += c;
-          count++;
+          withConfidence++;
+        } else {
+          withoutConfidence++;
         }
       }
     }
-    return count == 0 ? null : sum / count;
+    debugPrint('OCR confidence: $withConfidence line(s) reported, '
+        '$withoutConfidence without');
+    return withConfidence == 0 ? null : sum / withConfidence;
   }
 
   Future<bool> _nameExists(String raw) => ScanStore.recordExists(raw);

@@ -272,4 +272,159 @@ void main() {
       expect(code.batch, isNull);
     });
   });
+
+  // Every case below is a format the handoff document's section 7 requires and
+  // the parser previously got wrong. The first two are the ones that matter
+  // most: they did not fail loudly, they returned a confident wrong date.
+  group('printed formats', () {
+    test('a US-order date is read by value, not by pattern order', () {
+      // 12/31/2028 used to fall past the DD/MM pattern (31 is not a month) and
+      // be re-read as the MM/YY sitting inside it: December 2031, reported as
+      // parsed. Three years wrong, with no hint anything had gone astray.
+      final code = _parse(_stacked(<String>['EXP 12/31/2028']));
+
+      expect(code.status, DateCodeStatus.parsed);
+      expect(code.expiry, DateTime(2028, 12, 31));
+    });
+
+    test('a two-digit-year day/month/year date does not collapse to MM/YY', () {
+      // 04/02/28 used to match MM/YY on its first two components and resolve
+      // to April 2002 — in date, reported as 24 years expired.
+      final code = _parse(_stacked(<String>['EXP 04/02/28']));
+
+      expect(code.expiry, DateTime(2028, 2, 4));
+      expect(code.status, DateCodeStatus.ambiguous);
+      expect(code.note, contains('order'));
+    });
+
+    test('an unresolvable day/month order is reported, not hidden', () {
+      final code = _parse(_stacked(<String>['EXP 04/02/2028']));
+
+      expect(code.status, DateCodeStatus.ambiguous);
+      expect(code.expiry, DateTime(2028, 2, 4), reason: 'day-first default');
+      expect(code.matchedFormat, contains('ambiguous'));
+    });
+
+    test('a value over 12 settles the order outright', () {
+      expect(_parse(_stacked(<String>['EXP 15/03/2028'])).status,
+          DateCodeStatus.parsed);
+      expect(_parse(_stacked(<String>['EXP 03/15/2028'])).expiry,
+          DateTime(2028, 3, 15));
+    });
+
+    test('separator-less codes are read', () {
+      // How a continuous-inkjet head usually prints, and the case the last
+      // round of OCR work was aimed at — the recognizer could return these
+      // perfectly and the parser still had no pattern that could hold them.
+      expect(_parse(_stacked(<String>['EXP 20281004'])).expiry,
+          DateTime(2028, 10, 4));
+      expect(_parse(_stacked(<String>['EXP 102028'])).expiry,
+          DateTime(2028, 10, 31));
+      expect(_parse(_stacked(<String>['EXP 04022028'])).expiry,
+          DateTime(2028, 2, 4));
+    });
+
+    test('a space is a separator like any other', () {
+      final code = _parse(_stacked(<String>['EXP 10 2028']));
+
+      expect(code.status, DateCodeStatus.parsed);
+      expect(code.expiry, DateTime(2028, 10, 31));
+    });
+
+    test('the non-EXP expiry labels anchor a date', () {
+      for (final label in <String>[
+        'BEST BEFORE',
+        'BEST BEFORE END',
+        'USE BY',
+        'VALID UNTIL',
+        'BB',
+      ]) {
+        final code = _parse(_stacked(<String>['$label 10/2028']));
+        expect(code.status, DateCodeStatus.parsed, reason: label);
+        expect(code.expiry, DateTime(2028, 10, 31), reason: label);
+      }
+    });
+
+    test('PROD anchors a manufacture date, not an expiry', () {
+      final code = _parse(_stacked(<String>['PROD 10/2025', 'EXP 10/2028']));
+
+      expect(code.manufactured, DateTime(2025, 10, 1));
+      expect(code.expiry, DateTime(2028, 10, 31));
+    });
+  });
+
+  group('plausibility', () {
+    test('a date far in the past is a misread, not a very old product', () {
+      final code = _parse(_stacked(<String>['EXP 04/2002']));
+
+      expect(code.status, DateCodeStatus.unreadable);
+      expect(code.expiry, isNull);
+      expect(code.note, contains('past'));
+    });
+
+    test('a recently expired product is still reported, not swallowed', () {
+      // The floor must not eat genuine expiries. This one is two years gone,
+      // which is exactly the case the compliance engine exists to catch.
+      final code = _parse(_stacked(<String>['EXP 04/2024']));
+
+      expect(code.status, DateCodeStatus.parsed);
+      expect(code.expiry, DateTime(2024, 4, 30));
+    });
+  });
+
+  group('structured result', () {
+    test('carries the matched format and source substring', () {
+      final code = _parse(_stacked(<String>['EXP 04FEB2028']));
+
+      expect(code.matchedFormat, 'DD MMM YYYY');
+      expect(code.sourceText, '04FEB2028');
+    });
+  });
+
+  // Photographed off a real carton. The values are dot-matrix overprinted into
+  // a column beside pre-printed labels, and the year is two digits with a
+  // doubled dash for a separator.
+  group('dot-matrix carton, MMM--YY overprint', () {
+    test('reads MAR--25 / MAR--28 as a manufacture/expiry pair', () {
+      final code = _parse(_stacked(<String>[
+        'Batch No. :',
+        'Mfg. Date :',
+        'Exp. Date :',
+        '051',
+        'MAR--25',
+        'MAR--28',
+      ]));
+
+      expect(code.manufactured, DateTime(2025, 3, 1));
+      expect(code.expiry, DateTime(2028, 3, 31));
+      expect(code.status, DateCodeStatus.parsed);
+    });
+
+    test('the date is not filed as a batch code', () {
+      // Before MMM-YY existed as a pattern this matched nothing in the date
+      // scanner and fell through to the batch candidate regex, so the expiry
+      // was reported as a lot number and the expiry itself as unreadable.
+      final code = _parse(_stacked(<String>['Exp. Date : MAR--28']));
+
+      expect(code.expiry, DateTime(2028, 3, 31));
+      expect(code.batch, isNot('MAR--28'));
+    });
+
+    test('a doubled separator reads the same as a single one', () {
+      for (final printed in <String>['MAR--28', 'MAR-28', 'MAR 28', 'MAR28']) {
+        expect(_parse(_stacked(<String>['EXP $printed'])).expiry,
+            DateTime(2028, 3, 31),
+            reason: printed);
+      }
+    });
+
+    test('a four-digit alphabetic year still wins over the two-digit form', () {
+      final code = _parse(_stacked(<String>['E009288', 'JAN 2029', 'JAN 2026']));
+
+      expect(code.expiry, DateTime(2029, 1, 31));
+      expect(code.manufactured, DateTime(2026, 1, 1));
+      expect(code.batch, 'E009288');
+      expect(code.matchedFormat, 'MMM YYYY');
+    });
+  });
 }
