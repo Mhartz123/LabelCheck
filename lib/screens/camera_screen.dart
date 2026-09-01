@@ -20,6 +20,9 @@ import 'result_screen.dart';
 
 enum CameraMode { label, damage, inspection }
 
+/// One capture read twice: as photographed, and after enhancement.
+typedef _DualRead = ({RecognizedText? original, RecognizedText? enhanced});
+
 enum _CapturePhase { label, box }
 
 enum _ScanUiStage {
@@ -549,8 +552,23 @@ class _CameraScreenState extends State<CameraScreen>
         final path = _labelPaths[spec.slot];
         if (path == null) continue;
         final profile = _profileFor(spec.slot);
-        final recognized =
-        await _recognizeEnhanced(textRecognizer, path, profile);
+        final reads = await _recognizeBoth(textRecognizer, path, profile);
+
+        RecognizedText? recognized;
+        switch (spec.slot) {
+          case PhotoSlot.expiration:
+            // The only slot with an objective test of which reading is better:
+            // whichever one the date parser can actually make a date out of.
+            final picked = _pickByDateCode(
+              reads,
+              maxSkewDegrees: OcrGeometry.maxSkewDegreesFor(profile),
+            );
+            dateCode = picked.code;
+            recognized = picked.text;
+          case PhotoSlot.front:
+          case PhotoSlot.ingredients:
+            recognized = _pickRicher(reads);
+        }
         if (recognized == null) continue;
 
         switch (spec.slot) {
@@ -558,11 +576,6 @@ class _CameraScreenState extends State<CameraScreen>
             nameConfidence = _meanLineConfidence(recognized);
             textBySlot[spec.slot] = _frontTextByProminence(recognized);
           case PhotoSlot.expiration:
-
-            dateCode = DateCodeParser.parse(
-              recognized,
-              maxSkewDegrees: OcrGeometry.maxSkewDegreesFor(profile),
-            );
             textBySlot[spec.slot] = recognized.text;
           case PhotoSlot.ingredients:
             textBySlot[spec.slot] = recognized.text;
@@ -590,7 +603,23 @@ class _CameraScreenState extends State<CameraScreen>
     PhotoSlot.ingredients => OcrProfile.ingredients,
   };
 
-  Future<RecognizedText?> _recognizeEnhanced(
+  /// Both readings of one capture: ML Kit on the crop as photographed, and ML
+  /// Kit on the enhanced crop.
+  ///
+  /// The pipeline used to run on the enhanced image only, which meant a
+  /// capture the enhancement HURT had no way back. That is not hypothetical:
+  /// OcrPreprocessor flattens to luma, and on a colour front panel — green and
+  /// red type over purple board on an MX3 carton — the separation a reader
+  /// sees collapses to a few levels before the contrast stretch and unsharp
+  /// mask even run. ML Kit takes colour images natively and was never given
+  /// the chance to try.
+  ///
+  /// Two recognitions per slot rather than one. ML Kit's on-device Latin model
+  /// is cheap next to the capture itself, and the second read is also what
+  /// finally makes the preprocessing measurable: every scan now reports which
+  /// path won, which is the A/B comparison the evaluation set is supposed to
+  /// produce in bulk.
+  Future<_DualRead> _recognizeBoth(
       TextRecognizer recognizer,
       String path,
       OcrProfile profile,
@@ -623,20 +652,115 @@ class _CameraScreenState extends State<CameraScreen>
     }
 
     try {
-      return await recognizer
-          .processImage(InputImage.fromFilePath(enhancedPath ?? path));
-    } catch (e) {
-      debugPrint('OCR error: $e');
-      return null;
+      final original = await _recognizeFile(recognizer, path);
+      final enhanced = enhancedPath == null
+          ? null
+          : await _recognizeFile(recognizer, enhancedPath);
+      return (original: original, enhanced: enhanced);
     } finally {
       if (enhancedPath != null) {
         try {
           await File(enhancedPath).delete();
-        } catch (_) {
-
-        }
+        } catch (_) {}
       }
     }
+  }
+
+  Future<RecognizedText?> _recognizeFile(
+      TextRecognizer recognizer, String path) async {
+    try {
+      return await recognizer.processImage(InputImage.fromFilePath(path));
+    } catch (e) {
+      debugPrint('OCR error on $path: $e');
+      return null;
+    }
+  }
+
+  /// Picks the reading that yields the better date code.
+  ///
+  /// "Better" is not a guess here — a parsed date beats an ambiguous one beats
+  /// an unreadable one, and a pair with a manufacture date alongside the expiry
+  /// beats a lone expiry, because the pair is cross-checked against the shelf
+  /// life and a single date is not.
+  ({DateCode? code, RecognizedText? text}) _pickByDateCode(
+      _DualRead reads, {
+        required double maxSkewDegrees,
+      }) {
+    DateCode? bestCode;
+    RecognizedText? bestText;
+    var bestRank = -1;
+    var winner = 'none';
+
+    // Enhanced first, so a tie goes to the calibrated path.
+    for (final candidate in <(String, RecognizedText?)>[
+      ('enhanced', reads.enhanced),
+      ('original', reads.original),
+    ]) {
+      final text = candidate.$2;
+      if (text == null) continue;
+      final code =
+      DateCodeParser.parse(text, maxSkewDegrees: maxSkewDegrees);
+      final rank = _rankDateCode(code);
+      if (rank > bestRank) {
+        bestRank = rank;
+        bestCode = code;
+        bestText = text;
+        winner = candidate.$1;
+      }
+    }
+
+    debugPrint('OCR dateCode: $winner reading won '
+        '(${bestCode?.status.name ?? "no reading"}'
+        '${bestCode?.matchedFormat == null ? "" : ", ${bestCode!.matchedFormat}"})');
+    return (code: bestCode, text: bestText);
+  }
+
+  static int _rankDateCode(DateCode code) {
+    final byStatus = switch (code.status) {
+      DateCodeStatus.parsed => 2,
+      DateCodeStatus.ambiguous => 1,
+      DateCodeStatus.unreadable => 0,
+    };
+    return byStatus * 2 + (code.manufactured != null ? 1 : 0);
+  }
+
+  /// Picks the reading carrying more legible text, for the slots with no
+  /// structured result to test against.
+  RecognizedText? _pickRicher(_DualRead reads) {
+    final enhancedScore = _readingScore(reads.enhanced);
+    final originalScore = _readingScore(reads.original);
+    final useEnhanced = reads.enhanced != null &&
+        (reads.original == null || enhancedScore >= originalScore);
+
+    debugPrint('OCR text: ${useEnhanced ? "enhanced" : "original"} reading won '
+        '(enhanced ${enhancedScore.toStringAsFixed(0)} vs '
+        'original ${originalScore.toStringAsFixed(0)})');
+    return useEnhanced ? reads.enhanced : reads.original;
+  }
+
+  /// Alphanumeric characters recognized, each weighted by the confidence of
+  /// the line it came from.
+  ///
+  /// Character count alone would reward a reading that hallucinated extra
+  /// junk; mean confidence alone would reward one that found three characters
+  /// and was sure of them. The product penalises both. Where the recognizer
+  /// reports no confidence the weight is 1 and this degrades to a plain count.
+  static double _readingScore(RecognizedText? text) {
+    if (text == null) return 0;
+    var score = 0.0;
+    for (final block in text.blocks) {
+      for (final line in block.lines) {
+        var characters = 0;
+        for (final unit in line.text.codeUnits) {
+          final isDigit = unit >= 0x30 && unit <= 0x39;
+          final isUpper = unit >= 0x41 && unit <= 0x5A;
+          final isLower = unit >= 0x61 && unit <= 0x7A;
+          if (isDigit || isUpper || isLower) characters++;
+        }
+        score += characters * (line.confidence ?? 1.0);
+      }
+    }
+    return score;
   }
 
   String _frontTextByProminence(RecognizedText recognized) {

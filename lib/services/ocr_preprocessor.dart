@@ -74,6 +74,23 @@ const double kDateCodeMinSharpness = 80;
 const double kProductNameMinSharpness = 100;
 const double kIngredientsMinSharpness = 60;
 
+/// Crop height the sharpness thresholds above were measured at.
+///
+/// Laplacian variance is NOT scale-free. The same physical blur spread over
+/// more pixels produces a smaller second derivative per pixel, so raising the
+/// capture resolution drags the number down on a photo that is no less sharp.
+/// Measured on a real capture after the resolution change, an ingredients crop
+/// scoring 51 against a threshold of 60 still gave an essentially perfect read
+/// — the threshold had stopped meaning anything.
+///
+/// So the crop is box-averaged back down to roughly this height before the
+/// variance is taken, which keeps the hand-measured thresholds valid whatever
+/// the capture resolution. These are the crop heights the guides produced at
+/// ResolutionPreset.high, where the thresholds were set.
+const int kDateCodeSharpnessHeight = 140;
+const int kProductNameSharpnessHeight = 250;
+const int kIngredientsSharpnessHeight = 250;
+
 const double kDateCodeMaxBlownRatio = 0.03;
 const double kProductNameMaxBlownRatio = 0.05;
 const double kIngredientsMaxBlownRatio = 0.05;
@@ -112,6 +129,9 @@ class OcrProfileParams {
   /// the morphology entirely.
   final int closeGapPixels;
 
+  /// Height the crop is normalized to before sharpness is measured.
+  final int sharpnessHeight;
+
   final double unsharpAmount;
   final int minContrastSpread;
   final double minSharpness;
@@ -124,6 +144,7 @@ class OcrProfileParams {
     required this.stretchLowPercentile,
     required this.stretchHighPercentile,
     required this.closeGapPixels,
+    required this.sharpnessHeight,
     required this.unsharpAmount,
     required this.minContrastSpread,
     required this.minSharpness,
@@ -158,6 +179,7 @@ class OcrProfileParams {
     stretchLowPercentile: kStretchLowPercentile,
     stretchHighPercentile: kStretchHighPercentile,
     closeGapPixels: kDateCodeCloseGapPixels,
+    sharpnessHeight: kDateCodeSharpnessHeight,
     unsharpAmount: kDateCodeUnsharpAmount,
     minContrastSpread: kDateCodeMinContrastSpread,
     minSharpness: kDateCodeMinSharpness,
@@ -173,6 +195,7 @@ class OcrProfileParams {
     stretchLowPercentile: kStretchLowPercentile,
     stretchHighPercentile: kStretchHighPercentile,
     closeGapPixels: kProductNameCloseGapPixels,
+    sharpnessHeight: kProductNameSharpnessHeight,
     unsharpAmount: kProductNameUnsharpAmount,
     minContrastSpread: kProductNameMinContrastSpread,
     minSharpness: kProductNameMinSharpness,
@@ -188,6 +211,7 @@ class OcrProfileParams {
     stretchLowPercentile: kStretchLowPercentile,
     stretchHighPercentile: kStretchHighPercentile,
     closeGapPixels: kIngredientsCloseGapPixels,
+    sharpnessHeight: kIngredientsSharpnessHeight,
     unsharpAmount: kIngredientsUnsharpAmount,
     minContrastSpread: kIngredientsMinContrastSpread,
     minSharpness: kIngredientsMinSharpness,
@@ -265,7 +289,8 @@ class OcrPreprocessor {
         _percentile(scan.histogram, total, params.stretchHighPercentile);
     final spread = high - low;
     final blownRatio = scan.blownCount / total;
-    final sharpness = _laplacianVariance(scan.luma, scan.width, scan.height);
+    final sharpness = _normalizedLaplacianVariance(
+        scan.luma, scan.width, scan.height, params.sharpnessHeight);
 
     // Glare is checked before contrast because a blown panel also reads as low
     // contrast, and "too faint" would send the user looking for more light —
@@ -448,6 +473,56 @@ class OcrPreprocessor {
       if (cumulative > target) return v;
     }
     return 255;
+  }
+
+  /// Laplacian variance measured at a fixed scale, so the thresholds mean the
+  /// same thing at every capture resolution. See [kDateCodeSharpnessHeight].
+  static double _normalizedLaplacianVariance(
+    Uint8List luma,
+    int w,
+    int h,
+    int referenceHeight,
+  ) {
+    if (referenceHeight <= 0 || h <= 0) {
+      return _laplacianVariance(luma, w, h);
+    }
+    final factor = (h / referenceHeight).round();
+    if (factor <= 1) return _laplacianVariance(luma, w, h);
+
+    final dw = w ~/ factor;
+    final dh = h ~/ factor;
+    if (dw < 3 || dh < 3) return _laplacianVariance(luma, w, h);
+    return _laplacianVariance(
+        _boxDownsample(luma, w, factor, dw, dh), dw, dh);
+  }
+
+  /// Averages each factor x factor block down to one pixel. Averaging rather
+  /// than dropping samples, so the result carries the blur of the original
+  /// instead of the aliasing of a nearest-neighbour pick.
+  static Uint8List _boxDownsample(
+    Uint8List src,
+    int w,
+    int factor,
+    int dw,
+    int dh,
+  ) {
+    final out = Uint8List(dw * dh);
+    final area = factor * factor;
+    for (var y = 0; y < dh; y++) {
+      final srcY = y * factor;
+      for (var x = 0; x < dw; x++) {
+        final srcX = x * factor;
+        var sum = 0;
+        for (var j = 0; j < factor; j++) {
+          final row = (srcY + j) * w + srcX;
+          for (var i = 0; i < factor; i++) {
+            sum += src[row + i];
+          }
+        }
+        out[y * dw + x] = sum ~/ area;
+      }
+    }
+    return out;
   }
 
   static double _laplacianVariance(Uint8List luma, int w, int h) {

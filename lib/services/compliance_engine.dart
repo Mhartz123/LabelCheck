@@ -42,11 +42,22 @@ class ComplianceEngine {
   /// tier found no confident match; a hit against the FDA *warned* index means
   /// banned.
   ///
-  /// NOTE: the shipped model's embeddings are collapsed (~1% Recall@1), so any
-  /// scan that actually reaches it will likely be mis-flagged until the model
-  /// is retrained/verified. The last-ditch gate keeps that blast radius small;
-  /// set this to false to remove the tier entirely. See [OnnxSemanticMatcher].
-  static const bool _semanticMatcherEnabled = true;
+  /// DISABLED, and not merely as a precaution — this was observed happening.
+  ///
+  /// The shipped model's embeddings are collapsed (~1% Recall@1, mean pairwise
+  /// cosine ~0.99), so nearly any query matches something in the FDA *warned*
+  /// index. On a real MX3 Coffee Mix scan the front-label OCR came back as
+  /// "LE NT DNE*", which is low-confidence enough to open this tier, and the
+  /// tier then returned a match and the product was reported BANNED.
+  ///
+  /// The last-ditch gate was supposed to keep the blast radius small. It does
+  /// not: the gate opens precisely when the product name was read badly, which
+  /// is also when the query handed to a collapsed index is pure noise. A
+  /// garbled name is the trigger AND the failure mode.
+  ///
+  /// Leave this false until the model is retrained and Recall@1 is verified on
+  /// a held-out set. See [OnnxSemanticMatcher].
+  static const bool _semanticMatcherEnabled = false;
 
   /// Mean OCR confidence (per ML Kit, 0..1) on the product-name crop below
   /// which the name is treated as unreliable, opening the semantic fallback.

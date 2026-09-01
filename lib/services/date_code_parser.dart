@@ -432,11 +432,15 @@ class DateCodeParser {
       }
     }
 
-    // Alphabetic-month and ISO dates come first, and off the raw text: digit
-    // normalization would turn 04FEB2028 into 04FE82028 and destroy the month
-    // before it could ever be matched.
+    // Alphabetic-month and ISO dates come first, and off text whose digits are
+    // normalized everywhere EXCEPT inside the month word. Blanket normalization
+    // would turn 04FEB2028 into 04FE82028 and destroy the month before it could
+    // be matched; leaving the text raw instead loses the other half, because a
+    // dot-matrix year comes back as 30SEP2S or 30SEP2B as often as 30SEP25 and
+    // the two-digit year then matches nothing at all.
+    final monthSafe = _normalizeAroundMonths(_mask(raw, claimed));
     for (final spec in _rawPatterns) {
-      _collect(spec, _mask(raw, claimed), index, box, claimed, tokens, claim);
+      _collect(spec, monthSafe, index, box, claimed, tokens, claim);
     }
 
     // Digit normalization then applies to whatever is left, which by now has
@@ -475,6 +479,31 @@ class DateCodeParser {
       if (claimed[i]) return true;
     }
     return false;
+  }
+
+  /// Every month word in [source], including any long-spelling tail, so those
+  /// spans can be held back from digit normalization.
+  static final RegExp _monthWord = RegExp(
+      '(?:$_monthNamePattern)[A-Za-z]*',
+      caseSensitive: false);
+
+  /// Digit-normalizes [source] but leaves month words untouched.
+  ///
+  /// Substitution stays one character for one, so offsets into the result line
+  /// up with the raw text and [claim] spans stay valid.
+  static String _normalizeAroundMonths(String source) {
+    final protected = List<bool>.filled(source.length, false);
+    for (final match in _monthWord.allMatches(source)) {
+      for (var i = match.start; i < match.end; i++) {
+        protected[i] = true;
+      }
+    }
+    final buffer = StringBuffer();
+    for (var i = 0; i < source.length; i++) {
+      final ch = source[i];
+      buffer.write(protected[i] ? ch : (kDigitLookalikes[ch] ?? ch));
+    }
+    return buffer.toString();
   }
 
   /// Substitutes digit lookalikes one for one, so offsets into the result
