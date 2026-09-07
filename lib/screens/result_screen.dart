@@ -1,12 +1,26 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import '../models/scan_record.dart';
 import '../theme/app_colors.dart';
 import '../services/theme_controller.dart';
+import '../widgets/damage_overlay.dart';
 
 class ResultScreen extends StatelessWidget {
   final ScanRecord record;
 
-  const ResultScreen({super.key, required this.record});
+  /// The packaging photos this scan ran against, in [BoxSlot] order — the same
+  /// order [DamageDetection.sourceIndex] counts in. Supplied straight from the
+  /// camera screen because the record hasn't been saved to disk yet at this
+  /// point, so there is no record folder to read them back from. Empty for a
+  /// label-only scan, which simply shows no damage evidence.
+  final List<String> boxPhotoPaths;
+
+  const ResultScreen({
+    super.key,
+    required this.record,
+    this.boxPhotoPaths = const [],
+  });
 
   String get _title {
     switch (record.kind) {
@@ -199,7 +213,10 @@ class ResultScreen extends StatelessWidget {
                       ],
                     ),
                     const SizedBox(height: 8),
-                    _DamageSection(damage: record.damageCheck),
+                    _DamageSection(
+                      damage: record.damageCheck,
+                      boxPhotoPaths: boxPhotoPaths,
+                    ),
                   ],
                 ],
               ),
@@ -271,8 +288,12 @@ class ResultScreen extends StatelessWidget {
 
 class _DamageSection extends StatelessWidget {
   final DamageCheckResult damage;
+  final List<String> boxPhotoPaths;
 
-  const _DamageSection({required this.damage});
+  const _DamageSection({
+    required this.damage,
+    this.boxPhotoPaths = const [],
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -328,12 +349,20 @@ class _DamageSection extends StatelessWidget {
           if (damaged && damage.detections.isNotEmpty) ...[
             const SizedBox(height: 6),
             Text(
-              'Detections: ${damage.detections.toSet().join(', ')}',
+              'Detections: ${damage.detectionSummary}',
               style: TextStyle(fontSize: 12, color: fg),
             ),
           ],
+          if (damage.isDamaged)
+            DamageEvidence(
+              photos: boxPhotoPaths.map(File.new).toList(),
+              detections: damage.boxes,
+              foreground: fg,
+            ),
         ],
       ),
     );
   }
+
+
 }

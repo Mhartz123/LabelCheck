@@ -20,8 +20,54 @@ import 'result_screen.dart';
 
 enum CameraMode { label, damage, inspection }
 
-/// One capture read twice: as photographed, and after enhancement.
-typedef _DualRead = ({RecognizedText? original, RecognizedText? enhanced});
+/// One capture read twice: as photographed, and after enhancement, alongside
+/// the quality measurement taken while enhancing it.
+typedef _DualRead = ({
+  RecognizedText? original,
+  RecognizedText? enhanced,
+  CaptureQuality? quality,
+});
+
+/// What one label slot's capture turned into: the winning reading, the date it
+/// yielded where the slot is the expiry, and how legible the capture was.
+///
+/// Held from the moment the photo is taken so the confirmation sheet can show
+/// the user what will actually be extracted, and so the analysis step reuses
+/// the reading instead of paying for recognition a second time.
+/// The outcome of reading one slot across however many frames were taken.
+class _FrameVote {
+  /// The reading that won.
+  final _SlotRead read;
+
+  /// Which frame it came from, so that frame's image is the one kept.
+  final int frameIndex;
+
+  /// Frames that produced the same answer, and frames read in total.
+  final int agreeing;
+  final int total;
+
+  const _FrameVote({
+    required this.read,
+    required this.frameIndex,
+    required this.agreeing,
+    required this.total,
+  });
+
+  bool get isMultiFrame => total > 1;
+
+  /// Every frame that produced an answer produced the SAME answer. On a
+  /// dot-matrix code this is worth much more than any single read's
+  /// confidence, because the frames fail independently.
+  bool get unanimous => agreeing == total;
+}
+
+class _SlotRead {
+  final RecognizedText? text;
+  final DateCode? dateCode;
+  final CaptureQuality? quality;
+
+  const _SlotRead({this.text, this.dateCode, this.quality});
+}
 
 enum _CapturePhase { label, box }
 
@@ -129,6 +175,18 @@ class _CameraScreenState extends State<CameraScreen>
   int _guidePresetIndex = 1;
 
   final Map<PhotoSlot, String> _labelPaths = {};
+
+  /// Shown on the shutter while a multi-frame capture is in progress.
+  String? _frameProgress;
+
+  /// The reading for each captured label slot, taken at capture time so the
+  /// confirmation sheet can show it and the analysis step can reuse it.
+  final Map<PhotoSlot, _SlotRead> _slotReads = {};
+
+  /// One recognizer for the whole capture session. Creating one per photo
+  /// costs a model load each time, and recognition now runs on the shutter
+  /// rather than once at the end.
+  TextRecognizer? _recognizer;
   final Map<BoxSlot, String> _boxPaths = {};
 
   final Set<PhotoSlot> _declaredMissing = {};
@@ -144,22 +202,22 @@ class _CameraScreenState extends State<CameraScreen>
       (
       slot: BoxSlot.front,
       title: '$typeLabel — Front',
-      helper: 'Fit the whole front of the $lower inside the guide',
+      helper: 'Fill the frame with the whole front of the $lower',
       ),
       (
       slot: BoxSlot.side1,
       title: '$typeLabel — Side',
-      helper: 'Fit one side of the $lower inside the guide',
+      helper: 'Fill the frame with one side of the $lower',
       ),
       (
       slot: BoxSlot.side2,
       title: '$typeLabel — Other side',
-      helper: 'Fit the other side of the $lower inside the guide',
+      helper: 'Fill the frame with the other side of the $lower',
       ),
       (
       slot: BoxSlot.back,
       title: '$typeLabel — Back',
-      helper: 'Fit the whole back of the $lower inside the guide',
+      helper: 'Fill the frame with the whole back of the $lower',
       ),
     ];
   }
@@ -366,6 +424,7 @@ class _CameraScreenState extends State<CameraScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _controller?.dispose();
+    _recognizer?.close();
 
     SystemChrome.setPreferredOrientations(
         const [DeviceOrientation.portraitUp]);
@@ -426,45 +485,117 @@ class _CameraScreenState extends State<CameraScreen>
     });
   }
 
+  /// Frames taken for the expiration slot.
+  ///
+  /// A dot-matrix code sits right at the recognizer's limit, and which
+  /// characters survive changes shot to shot as focus, hand shake and the
+  /// angle of the light move. Three frames read independently and voted is a
+  /// far stronger signal than one lucky exposure, and frames DISAGREEING is
+  /// itself the honest answer that the code could not be read.
+  ///
+  /// Only this slot pays the cost. The name and ingredient panels are ordinary
+  /// solid print where a second frame buys almost nothing.
+  static const int kExpiryFrameCount = 3;
+
+  /// Takes one picture and returns the guide-cropped path, or null on failure.
+  Future<String?> _captureCrop({required bool cropToGuide}) async {
+    final controller = _controller;
+    if (controller == null || !controller.value.isInitialized) return null;
+
+    final XFile photo = await controller.takePicture();
+    final stagedPath = await AppStorage.newCapturePath(
+      prefix: _isLabelPhase
+          ? _labelSlots[_slotIndex].slot.name
+          : _boxSlots[_slotIndex].slot.name,
+    );
+    await photo.saveTo(stagedPath);
+    try {
+      await File(photo.path).delete();
+    } catch (_) {}
+
+    if (!cropToGuide) return stagedPath;
+
+    final guide = Rect.fromCenter(
+      center: _guideCenter,
+      width: _guideSize.width,
+      height: _guideSize.height,
+    );
+    final croppedPath = await ImageCropper.cropToGuide(
+      stagedPath,
+      screenSize: _previewSize,
+      guideRect: guide,
+      previewAspectRatio: _previewAspectRatio,
+    );
+    if (croppedPath != stagedPath) _deleteQuietly(stagedPath);
+    return croppedPath;
+  }
+
+  static void _deleteQuietly(String path) {
+    try {
+      final file = File(path);
+      if (file.existsSync()) file.deleteSync();
+    } catch (_) {}
+  }
+
   Future<void> _takePhoto() async {
     if (_controller == null || !_controller!.value.isInitialized) return;
     if (_isTaking || _isProcessing) return;
     setState(() => _isTaking = true);
 
     try {
-      final XFile photo = await _controller!.takePicture();
-
-      final stagedPath = await AppStorage.newCapturePath(
-        prefix: _isLabelPhase
-            ? _labelSlots[_slotIndex].slot.name
-            : _boxSlots[_slotIndex].slot.name,
-      );
-      await photo.saveTo(stagedPath);
-      try {
-        await File(photo.path).delete();
-      } catch (_) {
-
+      if (!_isLabelPhase) {
+        final path = await _captureCrop(cropToGuide: false);
+        if (path == null) return;
+        _boxPaths[_boxSlots[_slotIndex].slot] = path;
+        await _advanceOrFinish();
+        return;
       }
 
-      if (_isLabelPhase) {
+      final slot = _labelSlots[_slotIndex].slot;
+      final frameCount =
+          slot == PhotoSlot.expiration ? kExpiryFrameCount : 1;
 
-        final guide = Rect.fromCenter(
-          center: _guideCenter,
-          width: _guideSize.width,
-          height: _guideSize.height,
-        );
-        final croppedPath = await ImageCropper.cropToGuide(
-          stagedPath,
-          screenSize: _previewSize,
-          guideRect: guide,
-          previewAspectRatio: _previewAspectRatio,
-        );
-        final slot = _labelSlots[_slotIndex].slot;
-        _labelPaths[slot] = croppedPath;
-      } else {
-
-        _boxPaths[_boxSlots[_slotIndex].slot] = stagedPath;
+      final paths = <String>[];
+      for (var i = 0; i < frameCount; i++) {
+        if (frameCount > 1 && mounted) {
+          setState(() => _frameProgress = '${i + 1}/$frameCount');
+        }
+        final path = await _captureCrop(cropToGuide: true);
+        if (path != null) paths.add(path);
       }
+      if (mounted) setState(() => _frameProgress = null);
+      if (paths.isEmpty) return;
+
+      // Recognition happens here rather than after all three photos, so the
+      // user can be shown what was actually extracted while the pack is still
+      // in their hand and a retake costs nothing. The reading is kept and
+      // reused by the analysis step.
+      final voted = await _readFrames(slot, paths);
+      if (!mounted) {
+        for (final path in paths) {
+          _deleteQuietly(path);
+        }
+        return;
+      }
+
+      final keptPath = paths[voted.frameIndex];
+      final read = voted.read;
+
+      if (_needsConfirmation(slot, read)) {
+        final accepted = await _confirmCapture(slot, keptPath, read, voted);
+        if (!accepted) {
+          for (final path in paths) {
+            _deleteQuietly(path);
+          }
+          return; // stay on this slot for another attempt
+        }
+      }
+
+      for (final path in paths) {
+        if (path != keptPath) _deleteQuietly(path);
+      }
+      _labelPaths[slot] = keptPath;
+      _slotReads[slot] = read;
 
       await _advanceOrFinish();
     } catch (e) {
@@ -487,6 +618,7 @@ class _CameraScreenState extends State<CameraScreen>
     final slot = _currentLabelSlot;
     if (slot == null) return;
 
+    _slotReads.remove(slot);
     final existing = _labelPaths.remove(slot);
     if (existing != null) {
       try {
@@ -540,8 +672,14 @@ class _CameraScreenState extends State<CameraScreen>
     }
   }
 
+  /// Assembles the per-slot text from the readings taken at capture time.
+  ///
+  /// Recognition already ran on the shutter so the confirmation sheet could
+  /// show what was extracted; re-running it here would double the ML Kit work
+  /// and could hand the compliance engine a different answer from the one the
+  /// user was shown and accepted. A slot with no cached reading is recognized
+  /// on the spot, which only happens if a capture predates this flow.
   Future<_OcrResult> _ocrLabelSlots() async {
-    final textRecognizer = TextRecognizer();
     final textBySlot = <PhotoSlot, String>{};
     final buffer = StringBuffer();
 
@@ -551,24 +689,11 @@ class _CameraScreenState extends State<CameraScreen>
       for (final spec in _labelSlots) {
         final path = _labelPaths[spec.slot];
         if (path == null) continue;
-        final profile = _profileFor(spec.slot);
-        final reads = await _recognizeBoth(textRecognizer, path, profile);
 
-        RecognizedText? recognized;
-        switch (spec.slot) {
-          case PhotoSlot.expiration:
-            // The only slot with an objective test of which reading is better:
-            // whichever one the date parser can actually make a date out of.
-            final picked = _pickByDateCode(
-              reads,
-              maxSkewDegrees: OcrGeometry.maxSkewDegreesFor(profile),
-            );
-            dateCode = picked.code;
-            recognized = picked.text;
-          case PhotoSlot.front:
-          case PhotoSlot.ingredients:
-            recognized = _pickRicher(reads);
-        }
+        final read =
+            _slotReads[spec.slot] ?? await _readSlot(spec.slot, path);
+        final recognized = read.text;
+        if (spec.slot == PhotoSlot.expiration) dateCode = read.dateCode;
         if (recognized == null) continue;
 
         switch (spec.slot) {
@@ -586,8 +711,6 @@ class _CameraScreenState extends State<CameraScreen>
       }
     } catch (e) {
       debugPrint('OCR error: $e');
-    } finally {
-      await textRecognizer.close();
     }
     return _OcrResult(
       textBySlot: textBySlot,
@@ -602,6 +725,293 @@ class _CameraScreenState extends State<CameraScreen>
     PhotoSlot.expiration => OcrProfile.dateCode,
     PhotoSlot.ingredients => OcrProfile.ingredients,
   };
+
+  /// Shows what was read off [path] and asks whether to keep it.
+  ///
+  /// Returns true to accept the capture, false to retake. Deliberately not
+  /// dismissible by tapping away: an accidental dismissal that silently
+  /// accepted a bad read would defeat the point of asking.
+  Future<bool> _confirmCapture(
+      PhotoSlot slot, String path, _SlotRead read, _FrameVote vote) async {
+    final quality = read.quality;
+    var hint = quality != null && !quality.passes ? quality.failureReason : null;
+
+    // Frames disagreeing outranks any blur measurement: it is direct evidence
+    // that the code is being read differently each time, which no sharpness
+    // number can tell you.
+    if (vote.isMultiFrame && vote.agreeing > 0 && !vote.unanimous) {
+      hint = 'Only ${vote.agreeing} of ${vote.total} shots read this the same '
+          '— worth retaking';
+    }
+    final summary = _readSummary(slot, read);
+    final good = _isGoodRead(slot, read);
+
+    final accepted = await showModalBottomSheet<bool>(
+      context: context,
+      isDismissible: false,
+      enableDrag: false,
+      backgroundColor: AppColors.surface,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      builder: (sheetContext) => Padding(
+        padding: const EdgeInsets.fromLTRB(20, 10, 20, 24),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Center(
+              child: Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: AppColors.border,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            ClipRRect(
+              borderRadius: BorderRadius.circular(12),
+              child: Image.file(
+                File(path),
+                height: 120,
+                width: double.infinity,
+                fit: BoxFit.cover,
+              ),
+            ),
+            const SizedBox(height: 16),
+            Text(
+              vote.isMultiFrame
+                  ? (slot == PhotoSlot.expiration
+                      ? 'Date read  ·  ${vote.agreeing}/${vote.total} shots agree'
+                      : 'Text read  ·  ${vote.agreeing}/${vote.total} shots agree')
+                  : (slot == PhotoSlot.expiration ? 'Date read' : 'Text read'),
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                letterSpacing: 0.6,
+                color: AppColors.muted,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              summary,
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+                color: good ? AppColors.text : const Color(0xFFE57373),
+              ),
+            ),
+            if (hint != null) ...[
+              const SizedBox(height: 10),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Icon(Icons.info_outline,
+                      size: 16, color: Color(0xFFE0A030)),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      hint,
+                      style: const TextStyle(
+                          fontSize: 13, color: Color(0xFFE0A030)),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+            const SizedBox(height: 20),
+            Row(
+              children: [
+                Expanded(
+                  child: OutlinedButton(
+                    onPressed: () => Navigator.of(sheetContext).pop(false),
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      side: BorderSide(color: AppColors.border),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: Text('Retake',
+                        style: TextStyle(
+                            color: AppColors.text,
+                            fontWeight: FontWeight.w600)),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: FilledButton(
+                    onPressed: () => Navigator.of(sheetContext).pop(true),
+                    style: FilledButton.styleFrom(
+                      backgroundColor: AppColors.accent,
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(12)),
+                    ),
+                    child: const Text('Use this',
+                        style: TextStyle(fontWeight: FontWeight.bold)),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+    return accepted ?? false;
+  }
+
+  /// Whether [read] looks like a usable result, for colouring the summary.
+  bool _isGoodRead(PhotoSlot slot, _SlotRead read) => switch (slot) {
+        PhotoSlot.expiration => read.dateCode?.expiry != null,
+        PhotoSlot.front => _readingScore(read.text) >= kMinReadingScore,
+        PhotoSlot.ingredients =>
+          (read.text?.text ?? '').replaceAll(RegExp(r'[^A-Za-z]'), '').length >=
+              8,
+      };
+
+  /// Minimum confidence-weighted character count below which a front or
+  /// ingredients capture is considered to have read nothing worth keeping, and
+  /// the user is asked to confirm it. Deliberately low: the job is to catch a
+  /// capture that failed outright, not to second-guess a thin but real read.
+  static const double kMinReadingScore = 8;
+
+  /// Recognizes [path] for [slot] and keeps the result.
+  Future<_SlotRead> _readSlot(PhotoSlot slot, String path) async {
+    final recognizer = _recognizer ??= TextRecognizer();
+    final profile = _profileFor(slot);
+    final reads = await _recognizeBoth(recognizer, path, profile);
+
+    if (slot == PhotoSlot.expiration) {
+      final picked = _pickByDateCode(
+        reads,
+        maxSkewDegrees: OcrGeometry.maxSkewDegreesFor(profile),
+      );
+      return _SlotRead(
+          text: picked.text, dateCode: picked.code, quality: reads.quality);
+    }
+    return _SlotRead(text: _pickRicher(reads), quality: reads.quality);
+  }
+
+  /// Reads every frame of a capture and votes on the answer.
+  ///
+  /// Agreement is decided on the extracted VALUE, not on the recognized text:
+  /// two frames can disagree character by character and still yield the same
+  /// date, and it is the date that the verdict depends on. A slot with only
+  /// one frame falls through as a vote of one, so callers need no special
+  /// case.
+  Future<_FrameVote> _readFrames(PhotoSlot slot, List<String> paths) async {
+    final reads = <_SlotRead>[];
+    for (final path in paths) {
+      reads.add(await _readSlot(slot, path));
+    }
+
+    if (reads.length == 1) {
+      return _FrameVote(
+          read: reads.first, frameIndex: 0, agreeing: 1, total: 1);
+    }
+
+    // Tally by extracted value. Frames that read nothing are counted in the
+    // total but can never win, so three unreadable frames stay unreadable
+    // rather than one of them being promoted by default.
+    final tally = <String, List<int>>{};
+    for (var i = 0; i < reads.length; i++) {
+      final key = _voteKey(slot, reads[i]);
+      if (key == null) continue;
+      (tally[key] ??= <int>[]).add(i);
+    }
+
+    if (tally.isEmpty) {
+      debugPrint('OCR $slot: ${reads.length} frames, none readable');
+      return _FrameVote(
+          read: reads.first, frameIndex: 0, agreeing: 0, total: reads.length);
+    }
+
+    var bestKey = tally.keys.first;
+    for (final entry in tally.entries) {
+      if (entry.value.length > tally[bestKey]!.length) bestKey = entry.key;
+    }
+    final winners = tally[bestKey]!;
+
+    debugPrint('OCR $slot: ${winners.length}/${reads.length} frames agree '
+        'on "$bestKey"');
+    return _FrameVote(
+      read: reads[winners.first],
+      frameIndex: winners.first,
+      agreeing: winners.length,
+      total: reads.length,
+    );
+  }
+
+  /// The value two frames have to agree on, or null when a frame read nothing
+  /// worth voting with.
+  static String? _voteKey(PhotoSlot slot, _SlotRead read) {
+    if (slot == PhotoSlot.expiration) {
+      final code = read.dateCode;
+      final expiry = code?.expiry;
+      if (expiry == null) return null;
+      final made = code!.manufactured;
+      return '${expiry.toIso8601String()}|${made?.toIso8601String() ?? ""}';
+    }
+    final text = read.text?.text.replaceAll(RegExp(r'\s+'), ' ').trim() ?? '';
+    return text.isEmpty ? null : text;
+  }
+
+  /// Whether the user should be shown what was read before the capture is
+  /// accepted.
+  ///
+  /// The expiry always asks, because it is the one slot whose extracted VALUE
+  /// — not merely its text — drives a compliance verdict, and a silently wrong
+  /// date is worse than any number of retakes. The other two only interrupt
+  /// when the capture measured badly or came back with almost nothing, so an
+  /// ordinary scan stays a three-tap flow.
+  bool _needsConfirmation(PhotoSlot slot, _SlotRead read) {
+    if (slot == PhotoSlot.expiration) return true;
+    final quality = read.quality;
+    if (quality != null && !quality.passes) return true;
+    return _readingScore(read.text) < kMinReadingScore;
+  }
+
+  /// One line describing what will be extracted from [slot].
+  String _readSummary(PhotoSlot slot, _SlotRead read) {
+    switch (slot) {
+      case PhotoSlot.expiration:
+        final code = read.dateCode;
+        if (code == null || code.expiry == null) {
+          return 'No expiry date found';
+        }
+        final expiry = _formatMonthDay(code.expiry!, code.matchedFormat);
+        final made = code.manufactured;
+        return made == null
+            ? 'Expiry: $expiry'
+            : 'Expiry: $expiry   ·   Made: ${_formatMonthDay(made, null)}';
+      case PhotoSlot.front:
+        final text = read.text;
+        if (text == null) return 'No text read';
+        final headline = _frontTextByProminence(text).split('\n').first.trim();
+        return headline.isEmpty ? 'No text read' : headline;
+      case PhotoSlot.ingredients:
+        final letters = (read.text?.text ?? '')
+            .replaceAll(RegExp(r'[^A-Za-z]'), '')
+            .length;
+        return letters >= 8
+            ? 'Ingredient list detected ($letters letters)'
+            : 'No ingredient list detected';
+    }
+  }
+
+  static String _formatMonthDay(DateTime date, String? format) {
+    const months = <String>[
+      'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+      'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec',
+    ];
+    final month = months[date.month - 1];
+    // A month-precision code resolves to the last day of the month, so showing
+    // that day back to the user would invent a precision the pack never had.
+    final monthOnly = format != null && !format.contains('DD');
+    return monthOnly ? '$month ${date.year}' : '$month ${date.day}, ${date.year}';
+  }
 
   /// Both readings of one capture: ML Kit on the crop as photographed, and ML
   /// Kit on the enhanced crop.
@@ -625,6 +1035,7 @@ class _CameraScreenState extends State<CameraScreen>
       OcrProfile profile,
       ) async {
     String? enhancedPath;
+    CaptureQuality? quality;
     try {
       final decoded = img.decodeImage(await File(path).readAsBytes());
       if (decoded != null) {
@@ -632,7 +1043,7 @@ class _CameraScreenState extends State<CameraScreen>
         // exactly like preprocessing having worked: the catch below falls back
         // to the raw file and recognition carries on regardless. Without this
         // there is no way to tell from a device whether the pipeline ran.
-        final quality = OcrPreprocessor.assess(decoded, profile);
+        quality = OcrPreprocessor.assess(decoded, profile);
         final enhanced = OcrPreprocessor.run(decoded, profile);
         debugPrint('OCR $profile: crop ${decoded.width}x${decoded.height} '
             '-> ${enhanced.width}x${enhanced.height}, '
@@ -656,7 +1067,7 @@ class _CameraScreenState extends State<CameraScreen>
       final enhanced = enhancedPath == null
           ? null
           : await _recognizeFile(recognizer, enhancedPath);
-      return (original: original, enhanced: enhanced);
+      return (original: original, enhanced: enhanced, quality: quality);
     } finally {
       if (enhancedPath != null) {
         try {
@@ -711,7 +1122,8 @@ class _CameraScreenState extends State<CameraScreen>
 
     debugPrint('OCR dateCode: $winner reading won '
         '(${bestCode?.status.name ?? "no reading"}'
-        '${bestCode?.matchedFormat == null ? "" : ", ${bestCode!.matchedFormat}"})');
+        '${bestCode?.matchedFormat == null ? "" : ", ${bestCode!.matchedFormat}"}'
+        '${bestCode?.confidence == null ? "" : ", conf ${bestCode!.confidence!.toStringAsFixed(2)}"})');
     return (code: bestCode, text: bestText);
   }
 
@@ -763,14 +1175,24 @@ class _CameraScreenState extends State<CameraScreen>
     return score;
   }
 
+  /// The front panel's text with its display type hoisted to the front, since
+  /// LabelParser takes the product name from the first usable line.
+  ///
+  /// Each prominent line is kept whole and on its own line. Joining the
+  /// tallest ELEMENTS instead, which is what this used to do, glued fragments
+  /// from opposite ends of the panel into one string - an MX3 carton came back
+  /// as "M MS" and a Medicol carton as "LE NT DNE*" that way.
   String _frontTextByProminence(RecognizedText recognized) {
     final lines = OcrGeometry.horizontalLines(
       recognized,
       maxSkewDegrees: kProductNameMaxSkewDegrees,
     );
-    final largest = OcrGeometry.largestElements(lines);
-    if (largest.isEmpty) return recognized.text;
-    final headline = largest.map((e) => e.text).join(' ');
+    final prominent = OcrGeometry.prominentLines(lines);
+    final headline = prominent
+        .map((line) => line.text.trim())
+        .where((text) => text.isNotEmpty)
+        .join('\n');
+    if (headline.isEmpty) return recognized.text;
     return '$headline\n${recognized.text}';
   }
 
@@ -784,6 +1206,8 @@ class _CameraScreenState extends State<CameraScreen>
       _isProcessing = true;
       _scanStage = _ScanUiStage.extractingText;
     });
+    await _settleProcessingOverlay();
+    if (!mounted) return;
 
     final ocr = await _ocrLabelSlots();
 
@@ -802,11 +1226,32 @@ class _CameraScreenState extends State<CameraScreen>
     await _finishAnalysis(record);
   }
 
+  /// How long the progress card is held after it first paints, before the
+  /// analysis is allowed to start.
+  static const Duration _processingSettle = Duration(milliseconds: 220);
+
+  /// Lets the processing overlay actually reach the screen before the heavy
+  /// work begins.
+  ///
+  /// `setState` only *schedules* a frame; the awaits that follow it resolve as
+  /// microtasks, and microtasks all drain before the scheduled frame is ever
+  /// built. So the analysis would start — and on the damage path, block —
+  /// while the camera preview was still the thing on screen, and the user saw
+  /// the shutter freeze and then jump straight to the result. Waiting on
+  /// [SchedulerBinding.endOfFrame] guarantees the card has been rendered, and
+  /// the short hold afterwards keeps it from flashing past on a fast scan.
+  Future<void> _settleProcessingOverlay() async {
+    await WidgetsBinding.instance.endOfFrame;
+    await Future<void>.delayed(_processingSettle);
+  }
+
   Future<void> _runDamageAnalysis() async {
     setState(() {
       _isProcessing = true;
       _scanStage = _ScanUiStage.checkingDamage;
     });
+    await _settleProcessingOverlay();
+    if (!mounted) return;
 
     final record = await ComplianceEngine.analyzeDamage(
       packagingType: widget.packagingType!,
@@ -821,6 +1266,8 @@ class _CameraScreenState extends State<CameraScreen>
       _isProcessing = true;
       _scanStage = _ScanUiStage.extractingText;
     });
+    await _settleProcessingOverlay();
+    if (!mounted) return;
 
     final ocr = await _ocrLabelSlots();
 
@@ -861,7 +1308,10 @@ class _CameraScreenState extends State<CameraScreen>
           const [DeviceOrientation.portraitUp]);
       await Navigator.of(context).push(
         MaterialPageRoute(
-          builder: (_) => ResultScreen(record: record),
+          builder: (_) => ResultScreen(
+            record: record,
+            boxPhotoPaths: _capturedBoxPaths,
+          ),
         ),
       );
       _applyCameraOrientations();
@@ -913,6 +1363,7 @@ class _CameraScreenState extends State<CameraScreen>
   void _resetCaptureFlow() {
     setState(() {
       _labelPaths.clear();
+      _slotReads.clear();
       _boxPaths.clear();
       _declaredMissing.clear();
       _slotIndex = 0;
@@ -1313,6 +1764,7 @@ class _CameraScreenState extends State<CameraScreen>
                   child: IgnorePointer(
                     child: _GuideFrame(
                       size: _guideSize,
+                      showFrame: isLabelPhase,
                       zoomLabel: _currentZoom > _minZoom + 0.05
                           ? '${_currentZoom.toStringAsFixed(1)}x'
                           : null,
@@ -1674,6 +2126,7 @@ class _CameraScreenState extends State<CameraScreen>
       onTap: (_isTaking || _isProcessing) ? null : _takePhoto,
       isShutter: true,
       isTaking: _isTaking,
+      progress: _frameProgress,
     );
   }
 
@@ -1879,7 +2332,21 @@ class _GuideFrame extends StatelessWidget {
 
   final String? zoomLabel;
 
-  const _GuideFrame({required this.size, this.zoomLabel});
+  /// Whether to paint the corner brackets and the centre scan line.
+  ///
+  /// They are drawn for label capture, where the still really is cropped to
+  /// this rect before OCR sees it — the box is a promise about what will be
+  /// kept. Damage capture keeps the full frame and the detector sweeps the
+  /// whole photo, so the same box would promise a crop that never happens and
+  /// push people into framing tighter than they need to. Off for damage; the
+  /// zoom pill still shows, since pinch-zoom works in both phases.
+  final bool showFrame;
+
+  const _GuideFrame({
+    required this.size,
+    this.zoomLabel,
+    this.showFrame = true,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1890,34 +2357,36 @@ class _GuideFrame extends StatelessWidget {
       height: size.height,
       child: Stack(
         children: [
-          Positioned.fill(
-            child: CustomPaint(painter: _GuideCornerPainter(arm: arm)),
-          ),
-          Center(
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 14),
-              child: Container(
-                height: 2,
-                width: double.infinity,
-                decoration: BoxDecoration(
-                  gradient: LinearGradient(
-                    colors: [
-                      _camAccent.withValues(alpha: 0),
-                      _camAccent,
-                      _camAccent.withValues(alpha: 0),
+          if (showFrame) ...[
+            Positioned.fill(
+              child: CustomPaint(painter: _GuideCornerPainter(arm: arm)),
+            ),
+            Center(
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 14),
+                child: Container(
+                  height: 2,
+                  width: double.infinity,
+                  decoration: BoxDecoration(
+                    gradient: LinearGradient(
+                      colors: [
+                        _camAccent.withValues(alpha: 0),
+                        _camAccent,
+                        _camAccent.withValues(alpha: 0),
+                      ],
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: _camAccent.withValues(alpha: 0.5),
+                        blurRadius: 12,
+                        spreadRadius: 1,
+                      ),
                     ],
                   ),
-                  boxShadow: [
-                    BoxShadow(
-                      color: _camAccent.withValues(alpha: 0.5),
-                      blurRadius: 12,
-                      spreadRadius: 1,
-                    ),
-                  ],
                 ),
               ),
             ),
-          ),
+          ],
           if (zoomLabel != null)
             Align(
               alignment: Alignment.bottomCenter,
@@ -1999,6 +2468,10 @@ class _CircleButton extends StatelessWidget {
   final bool isShutter;
   final bool isTaking;
 
+  /// "2/3" while a multi-frame capture is running, so the wait reads as
+  /// progress rather than as the app having hung.
+  final String? progress;
+
   const _CircleButton({
     required this.color,
     required this.icon,
@@ -2007,6 +2480,7 @@ class _CircleButton extends StatelessWidget {
     required this.onTap,
     this.isShutter = false,
     this.isTaking = false,
+    this.progress,
   });
 
   @override
@@ -2025,10 +2499,21 @@ class _CircleButton extends StatelessWidget {
                 color: Colors.white.withValues(alpha: 0.9), width: 3),
           ),
           child: isTaking
-              ? const Padding(
-            padding: EdgeInsets.all(12),
-            child: CircularProgressIndicator(
-                strokeWidth: 2, color: Colors.white),
+              ? Stack(
+            alignment: Alignment.center,
+            children: [
+              const Padding(
+                padding: EdgeInsets.all(12),
+                child: CircularProgressIndicator(
+                    strokeWidth: 2, color: Colors.white),
+              ),
+              if (progress != null)
+                Text(progress!,
+                    style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold)),
+            ],
           )
               : Container(
             decoration: BoxDecoration(shape: BoxShape.circle, color: color),

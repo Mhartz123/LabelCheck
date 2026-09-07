@@ -36,6 +36,17 @@ class DateCode {
   /// The exact substring the expiry was read out of, for the same reason.
   final String? sourceText;
 
+  /// ML Kit's confidence in the line the expiry was read from, 0..1, or null
+  /// where the recognizer did not report one (it does not on iOS, and does not
+  /// for every model).
+  ///
+  /// This is the recognizer's confidence in the CHARACTERS, not the parser's
+  /// confidence in the date: a crisply recognized string can still be an
+  /// ambiguous date, and [status] is what carries that. Kept because section 7
+  /// of the integration brief asks the structured result for a confidence, and
+  /// because it is a second, independent signal alongside frame agreement.
+  final double? confidence;
+
   const DateCode({
     this.manufactured,
     this.expiry,
@@ -44,6 +55,7 @@ class DateCode {
     this.note,
     this.matchedFormat,
     this.sourceText,
+    this.confidence,
   });
 }
 
@@ -137,13 +149,22 @@ class DateCodeParser {
   /// One separator between date components: punctuation with optional spaces
   /// around it, or plain whitespace on its own. Overprinters use all of them,
   /// and `EXP 10 2028` is no rarer than `EXP 10/2028`.
-  // The repeat count is not cosmetic: a dot-matrix head renders a hyphen as
-  // two short dashes often enough that `MAR--25` is the printed form, and a
-  // single-character separator class does not match it.
-  static const String _sep = r'(?:\s*[/.\-]{1,2}\s*|\s+)';
+  // Characters an overprinter can put between date components, as ML Kit
+  // returns them. The unicode dashes and the middle dot are not decoration: a
+  // dot-matrix hyphen is a short run of dots, and the recognizer resolves it as
+  // an en dash, an em dash or a bullet about as often as a plain hyphen.
+  static const String _sepChar = r'[\s.,/\-‐‑‒–—―·•]';
 
-  /// As [_sep], but optional — the alphabetic forms are frequently solid.
-  static const String _optSep = r'\s*[/.\-]{0,2}\s*';
+  // The repeat count is not cosmetic either. A single carton prints
+  // `MAR.--25` — a period AND a doubled dash, three separator characters in a
+  // row — and a class capped at two matches none of it. Measured against real
+  // captures, not chosen for tidiness.
+  static const String _sep = '$_sepChar{1,3}';
+
+  /// As [_sep], but optional — the alphabetic forms are frequently solid, and
+  /// the month word anchors the match either way, so a looser bound is safe
+  /// here than it would be between two bare numbers.
+  static const String _optSep = '$_sepChar{0,4}';
 
   // Longest first; each match consumes its span so a three-component reading is
   // never re-read as the two-component date sitting inside it.
@@ -200,6 +221,16 @@ class DateCodeParser {
       '$_monthNamePattern'
       r')[A-Za-z]*' '$_optSep' r'(\d{2})(?!\d)',
       caseSensitive: false);
+  // Month-first alphabetic order, common on imported product. Low risk to add
+  // despite the general danger of more patterns: the month is a WORD, so a lot
+  // code cannot fall into it the way a bare six-digit pattern would swallow
+  // `120523`.
+  static final RegExp _monthNameDayYear = RegExp(
+      r'(?<![A-Za-z0-9])(?:'
+      '$_monthNamePattern'
+      r')[A-Za-z]*' '$_optSep' r'(\d{1,2})' '$_optSep' r'(20\d{2})(?!\d)',
+      caseSensitive: false);
+
   static final RegExp _monthNameShortYear = RegExp(
       r'(?<![A-Za-z0-9])(?:'
       '$_monthNamePattern'
@@ -321,6 +352,9 @@ class DateCodeParser {
       note: note,
       matchedFormat: expiryToken?.format,
       sourceText: expiryToken?.source,
+      confidence: expiryToken == null
+          ? null
+          : ordered[expiryToken.lineIndex].confidence,
       today: today ?? DateTime.now(),
     );
   }
@@ -340,6 +374,7 @@ class DateCodeParser {
     required String? note,
     required String? matchedFormat,
     required String? sourceText,
+    required double? confidence,
     required DateTime today,
   }) {
     DateCode unreadable(String why) =>
@@ -395,6 +430,7 @@ class DateCodeParser {
       note: note,
       matchedFormat: matchedFormat,
       sourceText: sourceText,
+      confidence: confidence,
     );
   }
 
@@ -549,6 +585,12 @@ class DateCodeParser {
       if (month == null) return null;
       return _dateToken(2000 + int.parse(m.group(2)!), month,
           int.parse(m.group(1)!), name, m, i, box);
+    }),
+    _DatePattern('MMM DD YYYY', _monthNameDayYear, (m, name, i, box) {
+      final month = _monthOf(m.group(0)!);
+      if (month == null) return null;
+      return _dateToken(int.parse(m.group(2)!), month, int.parse(m.group(1)!),
+          name, m, i, box);
     }),
     _DatePattern('MMM YYYY', _monthNameYear, (m, name, i, box) {
       final month = _monthOf(m.group(0)!);

@@ -126,6 +126,10 @@ class ReportService {
           'isDamaged': damage.isDamaged,
           // Per-detection class names, e.g. ['Dent', 'Dent', 'Scratches'].
           'detections': damage.detections,
+          // Same detections with geometry: normalised 0..1 rect on the source
+          // photo, per-detection confidence, and which packaging shot it came
+          // from. Lets the dashboard redraw the overlay the app showed.
+          'boxes': damage.boxes.map((b) => b.toJson()).toList(),
           'maxConfidence': damage.maxConfidence,
         },
     };

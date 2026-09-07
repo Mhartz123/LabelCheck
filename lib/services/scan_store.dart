@@ -89,25 +89,38 @@ class ScanStore {
   /// Returns whichever slot photos exist in [recordDir], label close-ups
   /// first (Front/Expiration/Ingredients) then box shots (Front/Side/Side/Back).
   /// Missing (skipped) slots are omitted.
-  static List<File> photosInOrder(Directory recordDir) {
-    const labelOrder = [
-      PhotoSlot.front,
-      PhotoSlot.expiration,
-      PhotoSlot.ingredients,
-    ];
-    const boxOrder = [
-      BoxSlot.front,
-      BoxSlot.side1,
-      BoxSlot.side2,
-      BoxSlot.back,
-    ];
+  static List<File> photosInOrder(Directory recordDir) => [
+    ..._existing(recordDir, _labelOrder.map((s) => s.fileBaseName)),
+    ...boxPhotosInOrder(recordDir),
+  ];
+
+  /// Just the packaging shots, in [BoxSlot] order with skipped slots omitted.
+  ///
+  /// This is the list [DamageDetection.sourceIndex] indexes into. It matches
+  /// the order the camera screen hands photos to the damage detector — both
+  /// walk the slots in declaration order and drop the ones never captured —
+  /// so index *n* here is the photo that produced detection index *n*.
+  /// Keep the two in step if you ever add or reorder a [BoxSlot].
+  static List<File> boxPhotosInOrder(Directory recordDir) =>
+      _existing(recordDir, _boxOrder.map((s) => s.fileBaseName));
+
+  static const _labelOrder = [
+    PhotoSlot.front,
+    PhotoSlot.expiration,
+    PhotoSlot.ingredients,
+  ];
+
+  static const _boxOrder = [
+    BoxSlot.front,
+    BoxSlot.side1,
+    BoxSlot.side2,
+    BoxSlot.back,
+  ];
+
+  static List<File> _existing(Directory recordDir, Iterable<String> baseNames) {
     final result = <File>[];
-    for (final slot in labelOrder) {
-      final f = File(p.join(recordDir.path, '${slot.fileBaseName}.jpg'));
-      if (f.existsSync()) result.add(f);
-    }
-    for (final slot in boxOrder) {
-      final f = File(p.join(recordDir.path, '${slot.fileBaseName}.jpg'));
+    for (final base in baseNames) {
+      final f = File(p.join(recordDir.path, '$base.jpg'));
       if (f.existsSync()) result.add(f);
     }
     return result;

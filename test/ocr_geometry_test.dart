@@ -54,6 +54,22 @@ TextLine _lineWith(List<TextElement> elements) => TextLine(
       angle: null,
     );
 
+/// As [_lineWith], but positioned vertically so reading order is meaningful.
+TextLine _lineAtTop(List<TextElement> elements, double top) => TextLine(
+      text: elements.map((e) => e.text).join(' '),
+      elements: elements,
+      boundingBox: Rect.fromLTWH(0, top, 100, 20),
+      recognizedLanguages: const <String>[],
+      cornerPoints: <math.Point<int>>[
+        math.Point<int>(0, top.round()),
+        math.Point<int>(100, top.round()),
+        math.Point<int>(100, top.round() + 20),
+        math.Point<int>(0, top.round() + 20),
+      ],
+      confidence: null,
+      angle: null,
+    );
+
 RecognizedText _recognized(List<TextLine> lines) => RecognizedText(
       text: lines.map((l) => l.text).join('\n'),
       blocks: <TextBlock>[
@@ -142,6 +158,50 @@ void main() {
 
     test('returns an empty list when there are no elements', () {
       expect(OcrGeometry.largestElements(const <TextLine>[]), isEmpty);
+    });
+  });
+
+  group('prominentLines', () {
+    test('keeps whole lines of display type, not a bag of tall glyphs', () {
+      // The MX3 failure: the brand and the descriptor are both large but sit
+      // on separate lines, and the small print is a third line. Gathering the
+      // tallest ELEMENTS across all three welded fragments together.
+      final brand = _lineAtTop(<TextElement>[
+        _element('MX3', const Rect.fromLTWH(0, 0, 60, 40)),
+      ], 0);
+      final descriptor = _lineAtTop(<TextElement>[
+        _element('COFFEE', const Rect.fromLTWH(0, 50, 70, 36)),
+        _element('MIX', const Rect.fromLTWH(75, 50, 30, 36)),
+      ], 50);
+      final smallPrint = _lineAtTop(<TextElement>[
+        _element('With', const Rect.fromLTWH(0, 100, 20, 8)),
+        _element('Mangosteen', const Rect.fromLTWH(25, 100, 50, 8)),
+      ], 100);
+
+      final kept = OcrGeometry.prominentLines(
+          <TextLine>[brand, descriptor, smallPrint]);
+
+      expect(kept.map((l) => l.text), <String>['MX3', 'COFFEE MIX']);
+      expect(kept.map((l) => l.text), isNot(contains('With Mangosteen')));
+    });
+
+    test('returns lines in top to bottom order whatever order they arrive in',
+        () {
+      final lower = _lineAtTop(<TextElement>[
+        _element('ADVANCE', const Rect.fromLTWH(0, 60, 80, 30)),
+      ], 60);
+      final upper = _lineAtTop(<TextElement>[
+        _element('IBUPROFEN', const Rect.fromLTWH(0, 0, 90, 30)),
+      ], 0);
+
+      // ML Kit's block order is not guaranteed to be reading order.
+      final kept = OcrGeometry.prominentLines(<TextLine>[lower, upper]);
+      expect(kept.map((l) => l.text), <String>['IBUPROFEN', 'ADVANCE']);
+    });
+
+    test('falls back to every line when nothing carries a height', () {
+      final bare = _lineWith(const <TextElement>[]);
+      expect(OcrGeometry.prominentLines(<TextLine>[bare]), <TextLine>[bare]);
     });
   });
 }

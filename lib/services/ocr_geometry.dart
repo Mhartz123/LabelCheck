@@ -64,6 +64,46 @@ class OcrGeometry {
     return kept;
   }
 
+  /// The lines of [lines] that carry display type — those holding at least one
+  /// element within [tolerance] of the tallest element on the panel — in top to
+  /// bottom order.
+  ///
+  /// This exists because [largestElements] returns a flat bag of elements
+  /// gathered across every line, and joining that bag into one string welds
+  /// fragments from opposite ends of a panel together: a real MX3 carton came
+  /// back as "M MS" and a Medicol carton as "LE NT DNE*", both of them pieces
+  /// of unrelated display text concatenated in element order.
+  ///
+  /// A product name is one or two adjacent lines of large type, not a
+  /// scattering of the tallest glyphs, so keeping whole lines and their reading
+  /// order preserves the thing the caller is actually looking for.
+  static List<TextLine> prominentLines(
+    List<TextLine> lines, {
+    double tolerance = kLargestElementTolerance,
+  }) {
+    var tallest = 0.0;
+    for (final line in lines) {
+      for (final element in line.elements) {
+        final height = element.boundingBox.height;
+        if (height > tallest) tallest = height;
+      }
+    }
+    if (tallest <= 0) return lines;
+
+    final cutoff = tallest * tolerance;
+    final kept = <TextLine>[
+      for (final line in lines)
+        if (line.elements
+            .any((e) => e.boundingBox.height >= cutoff))
+          line,
+    ];
+    // ML Kit's block order is roughly reading order but is not guaranteed to
+    // be, and a headline assembled out of order is no better than one
+    // assembled out of fragments.
+    kept.sort((a, b) => a.boundingBox.top.compareTo(b.boundingBox.top));
+    return kept;
+  }
+
   /// The elements of [lines] whose bounding box is within [tolerance] of the
   /// tallest one, in the order given.
   ///

@@ -6,7 +6,7 @@ import 'damage_detection_service.dart';
 /// Damage detection is split one [PackagingDamageDetector] per
 /// [PackagingType], registered in [PackagingDamageService]. Only
 /// [PackagingType.box] has a real model today ([BoxDamageDetector], backed
-/// by the on-device YOLOv8n ONNX model in `damage_detection_service.dart`).
+/// by the on-device YOLOv5nu ONNX model in `damage_detection_service.dart`).
 /// [PackagingType.foil] and [PackagingType.bottle] are placeholders
 /// ([FoilDamageDetector], [BottleDamageDetector]) that report themselves as
 /// unavailable — the capture flow, picker UI, and record storage for both
@@ -37,7 +37,7 @@ abstract class PackagingDamageDetector {
   Future<void> warmUp() async {}
 }
 
-/// The real, on-device YOLOv8n detector for cardboard boxes. Thin wrapper
+/// The real, on-device YOLOv5nu detector for cardboard boxes. Thin wrapper
 /// around the existing [DamageDetectionService] so that service's
 /// preprocessing/inference/NMS logic doesn't need to move or change.
 class BoxDamageDetector implements PackagingDamageDetector {

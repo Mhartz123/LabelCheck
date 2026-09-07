@@ -411,7 +411,14 @@ void main() {
     });
 
     test('a doubled separator reads the same as a single one', () {
-      for (final printed in <String>['MAR--28', 'MAR-28', 'MAR 28', 'MAR28']) {
+      // Photographed off cartons. MAR.--28 is a period followed by a doubled
+      // dash — three separator characters — and the unicode forms are what the
+      // recognizer returns for a run of dot-matrix dots.
+      for (final printed in <String>[
+        'MAR--28', 'MAR-28', 'MAR 28', 'MAR28',
+        'MAR.--28', 'MAR. --28', 'MAR.-28', 'MAR...28',
+        'MAR.··28', 'MAR.—28', 'MAR .. 28', 'MAR-.-28',
+      ]) {
         expect(_parse(_stacked(<String>['EXP $printed'])).expiry,
             DateTime(2028, 3, 31),
             reason: printed);
@@ -425,6 +432,49 @@ void main() {
       expect(code.manufactured, DateTime(2026, 1, 1));
       expect(code.batch, 'E009288');
       expect(code.matchedFormat, 'MMM YYYY');
+    });
+  });
+
+  // Photographed off an MX3 Coffee Mix carton: DDMMMYY overprinted beside
+  // pre-printed labels, with the dot-matrix S/5 confusion the crop produces.
+  group('MX3 carton, DDMMMYY overprint', () {
+    test('reads 30SEP25 / 30SEP27 as a pair, keeping the lot code intact', () {
+      final code = _parse(_stacked(<String>[
+        'Lot No.', 'Mfg. Date', 'Best Before',
+        'F252059', '30SEP25', '30SEP27',
+      ]));
+
+      expect(code.manufactured, DateTime(2025, 9, 30));
+      expect(code.expiry, DateTime(2027, 9, 30));
+      expect(code.batch, 'F252059');
+    });
+
+    test('survives the digit lookalikes a dot-matrix crop produces', () {
+      // Alphabetic dates are matched on raw text so the month word survives,
+      // which used to mean the YEAR never got digit-normalized and any of
+      // these failed outright.
+      for (final printed in <String>['30SEP2S', '3OSEP25', '30SEP2B']) {
+        final code = _parse(_stacked(<String>['Best Before $printed']));
+        expect(code.expiry, isNotNull, reason: printed);
+        expect(code.expiry!.month, 9, reason: printed);
+      }
+    });
+
+    test('month-first order is read too', () {
+      for (final printed in <String>['MAR 15 2028', 'MAR 15, 2028']) {
+        expect(_parse(_stacked(<String>['EXP $printed'])).expiry,
+            DateTime(2028, 3, 15),
+            reason: printed);
+      }
+    });
+
+    test('a six-digit lot code is still not a date', () {
+      // The guard on adding formats: these must keep failing, or every lot
+      // code on a carton becomes a confident expiry.
+      for (final noise in <String>['120523', '051225', '210774']) {
+        expect(_parse(_stacked(<String>['LOT $noise'])).expiry, isNull,
+            reason: noise);
+      }
     });
   });
 }

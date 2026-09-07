@@ -93,6 +93,65 @@ extension BoxSlotX on BoxSlot {
   }
 }
 
+/// One damage box the detector found, with where it sits on the photo.
+///
+/// [left]/[top]/[width]/[height] are **normalised to 0..1** against the source
+/// photo *after* EXIF orientation is baked in — the same space Flutter's
+/// `Image.file` and the PDF renderer draw in. Storing fractions rather than
+/// pixels means an overlay lines up at any display size, and a record stays
+/// readable if the photo is later resized.
+///
+/// [sourceIndex] is the position of the photo this box came from within the
+/// packaging photos for the scan, in [BoxSlot] order with skipped slots
+/// omitted — i.e. the same ordering as `ScanStore.boxPhotosInOrder`, so a
+/// saved record can find its way back to the right image.
+class DamageDetection {
+  final String label;
+  final double confidence;
+  final double left;
+  final double top;
+  final double width;
+  final double height;
+  final int sourceIndex;
+
+  const DamageDetection({
+    required this.label,
+    required this.confidence,
+    required this.left,
+    required this.top,
+    required this.width,
+    required this.height,
+    required this.sourceIndex,
+  });
+
+  double get right => left + width;
+  double get bottom => top + height;
+
+  /// Confidence as a whole percentage, for display ("Dent 87%").
+  String get confidenceLabel => '${(confidence * 100).round()}%';
+
+  Map<String, dynamic> toJson() => {
+    'label': label,
+    'confidence': confidence,
+    'left': left,
+    'top': top,
+    'width': width,
+    'height': height,
+    'sourceIndex': sourceIndex,
+  };
+
+  factory DamageDetection.fromJson(Map<String, dynamic> json) =>
+      DamageDetection(
+        label: json['label'] as String? ?? 'Damage',
+        confidence: (json['confidence'] as num?)?.toDouble() ?? 0.0,
+        left: (json['left'] as num?)?.toDouble() ?? 0.0,
+        top: (json['top'] as num?)?.toDouble() ?? 0.0,
+        width: (json['width'] as num?)?.toDouble() ?? 0.0,
+        height: (json['height'] as num?)?.toDouble() ?? 0.0,
+        sourceIndex: (json['sourceIndex'] as num?)?.toInt() ?? 0,
+      );
+}
+
 /// Result of a packaging-damage check via a `PackagingDamageDetector` (see
 /// `packaging_damage_service.dart`). [available] is false when the check
 /// couldn't run at all — no network/backend for a live model, or (for
@@ -105,6 +164,16 @@ class DamageCheckResult {
   final bool isDamaged;
   final List<String> detections;
 
+  /// Where each detection sits on its source photo, for drawing an overlay.
+  ///
+  /// Parallel to [detections] in content but richer: [detections] stays the
+  /// plain class-name list the dashboard payload and older records use, while
+  /// [boxes] adds geometry and per-detection confidence. Empty for records
+  /// saved before boxes were captured, and for detectors that report classes
+  /// without geometry — so always treat an empty [boxes] on a damaged record
+  /// as "no overlay available", never as "no damage".
+  final List<DamageDetection> boxes;
+
   /// Highest detection confidence (0..1) the damage model returned across all
   /// packaging photos, used to gate whether "severe" damage counts against
   /// compliance. 0 when nothing was detected or confidence wasn't reported.
@@ -115,6 +184,7 @@ class DamageCheckResult {
     required this.message,
     this.isDamaged = false,
     this.detections = const [],
+    this.boxes = const [],
     this.maxConfidence = 0.0,
   });
 
@@ -123,6 +193,7 @@ class DamageCheckResult {
         message = 'Damage detection not yet available',
         isDamaged = false,
         detections = const [],
+        boxes = const [],
         maxConfidence = 0.0;
 
   /// Used for label-only scans, where the damage check was never run because
@@ -132,6 +203,7 @@ class DamageCheckResult {
         message = 'Damage check not performed for this scan.',
         isDamaged = false,
         detections = const [],
+        boxes = const [],
         maxConfidence = 0.0;
 
   /// True if any detection class reads as a scratch (scratches count against
@@ -139,11 +211,32 @@ class DamageCheckResult {
   bool get hasScratch =>
       detections.any((d) => d.toLowerCase().contains('scratch'));
 
+  /// One line naming what was found and how sure the model was, e.g.
+  /// "Dent x2 (up to 87%), Scratches (72%)". Falls back to the bare class
+  /// list for records saved before per-detection confidence was stored.
+  String get detectionSummary {
+    if (boxes.isEmpty) return detections.toSet().join(', ');
+    final byLabel = <String, List<DamageDetection>>{};
+    for (final d in boxes) {
+      byLabel.putIfAbsent(d.label, () => []).add(d);
+    }
+    return byLabel.entries.map((e) {
+      final best = e.value
+          .map((d) => d.confidence)
+          .reduce((a, b) => a > b ? a : b);
+      final pct = '${(best * 100).round()}%';
+      return e.value.length > 1
+          ? '${e.key} ×${e.value.length} (up to $pct)'
+          : '${e.key} ($pct)';
+    }).join(', ');
+  }
+
   Map<String, dynamic> toJson() => {
     'available': available,
     'message': message,
     'isDamaged': isDamaged,
     'detections': detections,
+    'boxes': boxes.map((b) => b.toJson()).toList(),
     'maxConfidence': maxConfidence,
   };
 
@@ -155,6 +248,10 @@ class DamageCheckResult {
           'Damage detection not yet available',
       isDamaged: json['isDamaged'] as bool? ?? false,
       detections: (json['detections'] as List?)?.cast<String>() ?? const [],
+      boxes: (json['boxes'] as List?)
+          ?.map((b) => DamageDetection.fromJson(b as Map<String, dynamic>))
+          .toList() ??
+          const [],
       maxConfidence: (json['maxConfidence'] as num?)?.toDouble() ?? 0.0,
     );
   }

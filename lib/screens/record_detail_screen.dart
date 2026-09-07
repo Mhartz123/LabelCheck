@@ -5,6 +5,7 @@ import '../models/scan_record.dart';
 import '../services/scan_store.dart';
 import '../theme/app_colors.dart';
 import '../services/theme_controller.dart';
+import '../widgets/damage_overlay.dart';
 
 class RecordDetailScreen extends StatefulWidget {
   final Directory recordDir;
@@ -17,6 +18,11 @@ class RecordDetailScreen extends StatefulWidget {
 class _RecordDetailScreenState extends State<RecordDetailScreen> {
   ScanRecord? _record;
   List<File> _photos = [];
+
+  /// Packaging shots only, in the order [DamageDetection.sourceIndex] counts
+  /// in. Kept alongside [_photos] (which leads with the label close-ups) so a
+  /// photo can be matched back to the detections that came off it.
+  List<File> _boxPhotos = [];
   int _mainPhotoIndex = 0;
 
   static const String _hotline = '1-800-CHK-MUNA';
@@ -30,6 +36,19 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
     super.initState();
     _record = ScanStore.load(widget.recordDir);
     _photos = ScanStore.photosInOrder(widget.recordDir);
+    _boxPhotos = ScanStore.boxPhotosInOrder(widget.recordDir);
+  }
+
+  /// The damage boxes belonging to [photo], or empty if it is a label
+  /// close-up, carries no detections, or predates on-photo geometry.
+  List<DamageDetection> _detectionsFor(File photo) {
+    final record = _record;
+    if (record == null || record.damageCheck.boxes.isEmpty) return const [];
+    final index = _boxPhotos.indexWhere((f) => f.path == photo.path);
+    if (index < 0) return const [];
+    return record.damageCheck.boxes
+        .where((d) => d.sourceIndex == index)
+        .toList();
   }
 
   void _openFullscreen(int index) {
@@ -166,7 +185,22 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
               ),
               child: ClipRRect(
                 borderRadius: BorderRadius.circular(selected ? 10 : 13),
-                child: Image.file(_photos[i], fit: BoxFit.cover),
+                child: Stack(
+                  fit: StackFit.expand,
+                  children: [
+                    Image.file(_photos[i], fit: BoxFit.cover),
+                    // A dot marks the shots that actually have damage on
+                    // them, so the strip says where to look without the
+                    // user opening each one.
+                    if (_detectionsFor(_photos[i]).isNotEmpty)
+                      const Positioned(
+                        top: 3,
+                        right: 3,
+                        child: Icon(Icons.error,
+                            size: 13, color: Color(0xFFE65100)),
+                      ),
+                  ],
+                ),
               ),
             ),
           );
@@ -431,9 +465,15 @@ class _RecordDetailScreenState extends State<RecordDetailScreen> {
               style: TextStyle(fontSize: 12.5, height: 1.4, color: fg)),
           if (damaged && damage.detections.isNotEmpty) ...[
             const SizedBox(height: 6),
-            Text('Detections: ${damage.detections.toSet().join(', ')}',
+            Text('Detections: ${damage.detectionSummary}',
                 style: TextStyle(fontSize: 12, color: fg)),
           ],
+          if (damaged)
+            DamageEvidence(
+              photos: _boxPhotos,
+              detections: damage.boxes,
+              foreground: fg,
+            ),
         ],
       ),
     );

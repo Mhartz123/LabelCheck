@@ -34,5 +34,5 @@ flutter:
     - assets/model_qint8_arm64.onnx
     - assets/fda_index_embeddings_fp16.npy
     - assets/fda_index_names.txt
-    # On-device YOLOv8n packaging-damage detector (replaces the Roboflow API).
-    - assets/damage_yolov8n.onnx
+    # On-device YOLOv5nu (INT8) packaging-damage detector for boxes.
+    - assets/box_damage_yolov5nu_int8.onnx
